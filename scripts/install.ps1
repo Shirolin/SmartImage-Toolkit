@@ -9,9 +9,10 @@ $ShortcutPathInteractive = Join-Path $SendToPath "更多图片转换处理.lnk"
 $ScriptDir = $PSScriptRoot
 
 if (-not $ScriptDir) { $ScriptDir = Get-Location }
+$RootDir = Split-Path -Path $ScriptDir -Parent
 
-$TargetPathWebP = Join-Path $ScriptDir "run.bat"
-$TargetPathInteractive = Join-Path $ScriptDir "run_interactive.bat"
+$TargetPathWebP = Join-Path $RootDir "run.bat"
+$TargetPathInteractive = Join-Path $RootDir "run_interactive.bat"
 
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "  ✨ SmartImage-Toolkit 极速安装向导 ✨" -ForegroundColor Cyan
@@ -35,7 +36,7 @@ if (Test-Path $ShortcutPathOld) {
 # 创建转成 WebP 快捷方式
 $Shortcut1 = $Shell.CreateShortcut($ShortcutPathWebP)
 $Shortcut1.TargetPath = $TargetPathWebP
-$Shortcut1.WorkingDirectory = $ScriptDir
+$Shortcut1.WorkingDirectory = $RootDir
 $Shortcut1.Description = "批量转换图片为 WebP 格式"
 $Shortcut1.IconLocation = "shell32.dll, 225"
 $Shortcut1.Save()
@@ -43,7 +44,7 @@ $Shortcut1.Save()
 # 创建转成更多图片格式快捷方式
 $Shortcut2 = $Shell.CreateShortcut($ShortcutPathInteractive)
 $Shortcut2.TargetPath = $TargetPathInteractive
-$Shortcut2.WorkingDirectory = $ScriptDir
+$Shortcut2.WorkingDirectory = $RootDir
 $Shortcut2.Description = "交互式选择转换图片格式 (WebP/PNG/AVIF/MozJPEG/抠图等)"
 $Shortcut2.IconLocation = "shell32.dll, 321" # 修改一下图标以示区别
 $Shortcut2.Save()

@@ -1,8 +1,11 @@
 ﻿# SmartImage-Toolkit 离线打包工具
 # 用途：为非程序员朋友生成一个“解压即用”的绿色安装包
 
-$SourceDir = $PSScriptRoot
-$DistDir = Join-Path $SourceDir "dist"
+$ScriptDir = $PSScriptRoot
+if (-not $ScriptDir) { $ScriptDir = Get-Location }
+$RootDir = Split-Path -Path $ScriptDir -Parent
+
+$DistDir = Join-Path $RootDir "dist"
 $BinDir = Join-Path $DistDir "bin"
 
 Write-Host "==========================================" -ForegroundColor Cyan
@@ -35,26 +38,34 @@ try {
 # 3. 复制核心代码和依赖
 Write-Host "⚙️ [处理中] 正在打包程序组件和预装依赖 (node_modules)..." -ForegroundColor Yellow
 
+# 创建目标二级目录
+New-Item -ItemType Directory -Path (Join-Path $DistDir "src") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $DistDir "scripts") -Force | Out-Null
+
 $ItemsToCopy = @(
-    "convert.js",
+    "src/convert.js",
     "run.bat",
     "run_interactive.bat",
-    "install.ps1",
-    "uninstall.ps1",
+    "scripts/install.ps1",
+    "scripts/uninstall.ps1",
     "package.json",
+    "package-lock.json",
     "node_modules"
 )
 
 foreach ($item in $ItemsToCopy) {
-    $src = Join-Path $SourceDir $item
+    $src = Join-Path $RootDir $item
+    $dest = Join-Path $DistDir $item
     if (Test-Path $src) {
-        Copy-Item -Path $src -Destination $DistDir -Recurse -Force
+        Copy-Item -Path $src -Destination $dest -Recurse -Force
         Write-Host "📄 [打包] 已包含: $item" -ForegroundColor Gray
+    } else {
+        Write-Host "⚠️ [警告] 找不到待打包文件: $src" -ForegroundColor Yellow
     }
 }
 
 # 把预先写好的外部说明文件拷到 dist 里
-$ReadmeSrc = Join-Path $SourceDir "dist_readme.txt"
+$ReadmeSrc = Join-Path $ScriptDir "dist_readme.txt"
 $ReadmeDest = Join-Path $DistDir "使用说明.txt"
 if (Test-Path $ReadmeSrc) {
     Copy-Item -Path $ReadmeSrc -Destination $ReadmeDest -Force
