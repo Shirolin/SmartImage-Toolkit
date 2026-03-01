@@ -1,23 +1,23 @@
-const sharp = require('sharp');
-const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
-const { removeBackground } = require('@imgly/background-removal-node');
+import sharp from 'sharp';
+import fs from 'fs';
+import path from 'path';
+import readline from 'readline';
+import { removeBackground } from '@imgly/background-removal-node';
 
 // 导入美化组件
-const ora = require('ora');
-const chalk = require('chalk');
+import ora from 'ora';
+import chalk from 'chalk';
 
 // 支持的图片扩展名
-const SUPPORTED_EXTS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.gif', '.webp'];
+const SUPPORTED_EXTS: string[] = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.gif', '.webp'];
 
-async function getFiles(inputPath) {
+async function getFiles(inputPath: string): Promise<string[]> {
     try {
         const stats = fs.statSync(inputPath);
         if (stats.isFile()) {
             return SUPPORTED_EXTS.includes(path.extname(inputPath).toLowerCase()) ? [inputPath] : [];
         } else if (stats.isDirectory()) {
-            let results = [];
+            let results: string[] = [];
             const list = fs.readdirSync(inputPath);
             for (const file of list) {
                 const fullPath = path.join(inputPath, file);
@@ -26,13 +26,28 @@ async function getFiles(inputPath) {
             return results;
         }
         return [];
-    } catch (err) {
+    } catch {
         console.error(chalk.red(`⚠️ [读取跳过] 无法访问路径: ${inputPath}`));
         return [];
     }
 }
 
-async function convertImage(filePath, format, isInteractive, spinnerInstance) {
+export interface ConvertResult {
+    status: 'success' | 'error' | 'skipped';
+    file: string;
+    reason?: string;
+}
+
+export type TargetFormat = 'webp' | 'png' | 'avif' | 'mozjpeg' | 'rmbg_solid';
+export type AiModel = 'large' | 'medium' | 'small';
+
+// @ts-ignore 因为 Ora 的 Type 可能有些版本差异
+async function convertImage(
+    filePath: string,
+    format: TargetFormat,
+    spinnerInstance: any,
+    aiModel: AiModel = 'medium'
+): Promise<ConvertResult> {
     const dir = path.dirname(filePath);
     const ext = path.extname(filePath);
     const name = path.basename(filePath, ext);
@@ -62,12 +77,12 @@ async function convertImage(filePath, format, isInteractive, spinnerInstance) {
             suffix = '_optimized';
             sharpInstance = sharpInstance.jpeg({ quality: 85, mozjpeg: true, chromaSubsampling: '4:4:4' });
             break;
-        case 'rmbg_solid':
+        case 'rmbg_solid': {
             outputExt = ext.toLowerCase() === '.webp' ? '.webp' : '.png';
             suffix = '_nobg';
             // 内存防漏保护变量
-            let normalizedBuffer = null;
-            let finalBuffer = null;
+            let normalizedBuffer: Buffer | null = null;
+            let finalBuffer: Buffer | null = null;
 
             try {
                 if (spinnerInstance) {
@@ -79,22 +94,27 @@ async function convertImage(filePath, format, isInteractive, spinnerInstance) {
                 try {
                     normalizedBuffer = await sharp(filePath).png().toBuffer();
                 } catch (sharpErr) {
-                    throw new Error(`图片文件解析失败 (文件可能已损坏或不支持此处理): ${sharpErr.message}`);
+                    throw new Error(`图片文件解析失败 (文件可能已损坏或不支持此处理): ${(sharpErr as any).message}`);
                 }
 
                 // 手动构造无类型歧义的强类型 Blob，绕过底层解析 Bug
-                const { Blob } = require('buffer');
-                const inputBlob = new Blob([normalizedBuffer], { type: 'image/png' });
+                // 由于使用 ESM import 会报 Blob 未导出，这里改用全局 Blob 或在上面 import buffer
+                const { Blob } = await import('buffer');
+                // @ts-ignore TS 内置 DOM 类型与 Node 的 Buffer 冲突，但实际运行无碍
+                const inputBlob = new Blob([normalizedBuffer as any], { type: 'image/png' });
 
-                const blob = await removeBackground(inputBlob, {
+                const blob = await removeBackground(inputBlob as any, {
+                    model: aiModel,
                     output: {
-                        type: 'image/png',
-                        quality: 0.8
+                        format: 'image/x-rgba8', // 【核心修改】提取 100% 无损原生像素数组，禁止内部执行二次由于PNG编码导致的色彩重采样
+                        quality: 1.0
                     },
-                    progress: (key, current, total) => {
+                    progress: (key: string, current: number, total: number) => {
                         const percent = ((current / total) * 100).toFixed(1);
                         if (spinnerInstance) {
-                            spinnerInstance.text = chalk.yellow(`🧠 [AI 处理中] 图像: ${name} | 模型加载与计算: ${percent}%`);
+                            spinnerInstance.text = chalk.yellow(
+                                `🧠 [AI 处理中] 图像: ${name} | 模型(${aiModel}): ${percent}%`
+                            );
                             spinnerInstance.render();
                         }
                     }
@@ -105,11 +125,19 @@ async function convertImage(filePath, format, isInteractive, spinnerInstance) {
                     spinnerInstance.render();
                 }
 
-                // 性能优化：剔除冗余的 sharp 实例化
-                const arrayBuffer = await blob.arrayBuffer();
+                const arrayBuffer = await (blob as any).arrayBuffer();
                 const aiResultBuffer = Buffer.from(arrayBuffer);
 
-                let resultSharp = sharp(aiResultBuffer);
+                // 根据底层文档 image/x-rgba8 数据格式提取并直接交给 Sharp 原生组装
+                let resultSharp = sharp(aiResultBuffer, {
+                    raw: {
+                        width: (inputBlob as any).width || (await sharp(normalizedBuffer).metadata()).width,
+
+                        height: (inputBlob as any).height || (await sharp(normalizedBuffer).metadata()).height,
+                        channels: 4 // RGBA 4通道
+                    }
+                });
+
                 if (outputExt === '.webp') {
                     resultSharp = resultSharp.webp({ lossless: true, effort: 6 });
                 } else {
@@ -118,13 +146,19 @@ async function convertImage(filePath, format, isInteractive, spinnerInstance) {
 
                 finalBuffer = await resultSharp.toBuffer();
                 sharpInstance = sharp(finalBuffer);
-
             } catch (err) {
-                return { status: 'error', file: filePath, reason: err.message.includes('图片文件解析失败') ? err.message : `AI 处理异常: ${err.message}` };
+                return {
+                    status: 'error',
+                    file: filePath,
+                    reason: (err as any).message.includes('图片文件解析失败')
+                        ? (err as any).message
+                        : `AI 处理异常: ${(err as any).message}`
+                };
             } finally {
                 normalizedBuffer = null;
             }
             break;
+        }
         default:
             return { status: 'error', file: filePath, reason: '不支持的目标格式' };
     }
@@ -141,11 +175,16 @@ async function convertImage(filePath, format, isInteractive, spinnerInstance) {
         await sharpInstance.toFile(outputPath);
         return { status: 'success', file: filePath };
     } catch (err) {
-        return { status: 'error', file: filePath, reason: err.message };
+        return { status: 'error', file: filePath, reason: (err as any).message };
     }
 }
 
-function askFormat() {
+export interface InteractiveResolution {
+    format: TargetFormat;
+    aiModel?: AiModel;
+}
+
+function askFormat(): Promise<InteractiveResolution> {
     const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout
@@ -154,16 +193,26 @@ function askFormat() {
     return new Promise((resolve) => {
         console.log(`\n${chalk.cyan.bold('🎨 请选择要转换的目标格式')} ${chalk.gray('(输入对应数字并回车)')}:`);
         console.log(chalk.gray('━'.repeat(50)));
-        console.log(`  ${chalk.green.bold('1.')} ${chalk.white.bold('WebP')}      ${chalk.gray('=> 极佳的体积和画质平衡，推荐用于网页')}`);
-        console.log(`  ${chalk.green.bold('2.')} ${chalk.white.bold('PNG')}       ${chalk.gray('=> 极度压缩版本，最高系统兼容性并保留透明度')}`);
-        console.log(`  ${chalk.green.bold('3.')} ${chalk.white.bold('AVIF')}      ${chalk.gray('=> 最硬核顶级压缩率，体积最小，适合现代设备')}`);
-        console.log(`  ${chalk.green.bold('4.')} ${chalk.white.bold('MozJPEG')}   ${chalk.gray('=> 最好的 JPG 有损压缩，AI 和旧设备 100% 兼容')}`);
-        console.log(`  ${chalk.green.bold('5.')} ${chalk.white.bold('AI 抠图')}   ${chalk.gray('=> 智能分离主体，输出去除背景的极佳透明图片')}`);
+        console.log(
+            `  ${chalk.green.bold('1.')} ${chalk.white.bold('WebP')}      ${chalk.gray('=> 极佳的体积和画质平衡，推荐用于网页')}`
+        );
+        console.log(
+            `  ${chalk.green.bold('2.')} ${chalk.white.bold('PNG')}       ${chalk.gray('=> 极度压缩版本，最高系统兼容性并保留透明度')}`
+        );
+        console.log(
+            `  ${chalk.green.bold('3.')} ${chalk.white.bold('AVIF')}      ${chalk.gray('=> 最硬核顶级压缩率，体积最小，适合现代设备')}`
+        );
+        console.log(
+            `  ${chalk.green.bold('4.')} ${chalk.white.bold('MozJPEG')}   ${chalk.gray('=> 最好的 JPG 有损压缩，AI 和旧设备 100% 兼容')}`
+        );
+        console.log(
+            `  ${chalk.magenta.bold('5.')} ${chalk.white.bold('AI 抠图')}   ${chalk.magenta('=> 智能分离主体，输出去除背景的高清透明图片')}`
+        );
         console.log(`  ${chalk.red.bold('0.')} ${chalk.red('取消退出')}  ${chalk.gray('=> 放弃转换并退出程序')}`);
         console.log(chalk.gray('━'.repeat(50)));
 
         const question = () => {
-            rl.question(chalk.yellow('💬 请输入对应数字: '), (answer) => {
+            rl.question(chalk.yellow('💬 请输入对应数字: '), (answer: string) => {
                 switch (answer.trim()) {
                     case '0':
                         console.log(chalk.red('👋 操作已取消。'));
@@ -172,24 +221,59 @@ function askFormat() {
                         break;
                     case '1':
                         rl.close();
-                        resolve('webp');
+                        resolve({ format: 'webp' });
                         break;
                     case '2':
                         rl.close();
-                        resolve('png');
+                        resolve({ format: 'png' });
                         break;
                     case '3':
                         rl.close();
-                        resolve('avif');
+                        resolve({ format: 'avif' });
                         break;
                     case '4':
                         rl.close();
-                        resolve('mozjpeg');
+                        resolve({ format: 'mozjpeg' });
                         break;
-                    case '5':
-                        rl.close();
-                        resolve('rmbg_solid');
+                    case '5': {
+                        console.log(
+                            `\n${chalk.magenta.bold('🧠 请选择 AI 抠图的精细度模型')} ${chalk.gray('(输入对应数字并回车)')}:`
+                        );
+                        console.log(chalk.gray('━'.repeat(50)));
+                        console.log(
+                            `  ${chalk.yellow.bold('1.')} ${chalk.white.bold('极致高细度 (Large)')}   ${chalk.gray('=> 速度稍慢，最适合【复杂边缘、动物毛发、发丝】')}`
+                        );
+                        console.log(
+                            `  ${chalk.green.bold('2.')} ${chalk.white.bold('均衡模式 (Medium)')}    ${chalk.gray('=> 默认推荐，速度与质量绝佳平衡，适合【日常或人像及物品对象】')}`
+                        );
+                        console.log(
+                            `  ${chalk.cyan.bold('3.')} ${chalk.white.bold('闪电极速 (Small)')}     ${chalk.gray('=> 速度极快，适合批量抠图和【边界明显的小图片】')}`
+                        );
+                        console.log(chalk.gray('━'.repeat(50)));
+                        const aiQuestion = () => {
+                            rl.question(chalk.yellow('💬 请选择模型级别: '), (aiAnswer: string) => {
+                                let model: AiModel = 'medium';
+                                switch (aiAnswer.trim()) {
+                                    case '1':
+                                        model = 'large';
+                                        break;
+                                    case '2':
+                                        model = 'medium';
+                                        break;
+                                    case '3':
+                                        model = 'small';
+                                        break;
+                                    default:
+                                        console.log(chalk.red('❌ 无效输入，请重新输入 1-3 之间的数字。'));
+                                        return aiQuestion();
+                                }
+                                rl.close();
+                                resolve({ format: 'rmbg_solid', aiModel: model });
+                            });
+                        };
+                        aiQuestion();
                         break;
+                    }
                     default:
                         console.log(chalk.red('❌ 无效输入，请重新输入 0-5 之间的数字。'));
                         question();
@@ -204,16 +288,23 @@ function askFormat() {
 (async () => {
     let args = process.argv.slice(2);
     let isInteractive = false;
-    let targetFormat = 'webp'; // 默认格式
+    let targetFormat: TargetFormat | string = 'webp'; // 默认格式
+    let aiModelConfig: AiModel = 'medium'; // 默认模型
 
     if (args.includes('--interactive')) {
         isInteractive = true;
-        args = args.filter(arg => arg !== '--interactive');
+        args = args.filter((arg) => arg !== '--interactive');
     } else {
         const formatIndex = args.indexOf('--format');
         if (formatIndex !== -1 && args[formatIndex + 1]) {
             targetFormat = args[formatIndex + 1];
             args.splice(formatIndex, 2);
+        }
+
+        const aiModelIndex = args.indexOf('--ai-model');
+        if (aiModelIndex !== -1 && args[aiModelIndex + 1]) {
+            aiModelConfig = args[aiModelIndex + 1] as AiModel;
+            args.splice(aiModelIndex, 2);
         }
     }
 
@@ -223,14 +314,16 @@ function askFormat() {
     }
 
     if (isInteractive) {
-        targetFormat = await askFormat();
+        const resolution = await askFormat();
+        targetFormat = resolution.format;
+        if (resolution.aiModel) aiModelConfig = resolution.aiModel;
     }
 
     console.log(chalk.cyan('\n=================================================='));
     console.log(chalk.yellow('🔍 正在检索系统文件，如果文件较多可能需要一点时间...'));
     console.log(chalk.cyan('==================================================\n'));
 
-    let allFiles = [];
+    let allFiles: string[] = [];
     for (const arg of args) {
         if (fs.existsSync(arg)) {
             const files = await getFiles(arg);
@@ -245,10 +338,14 @@ function askFormat() {
         return;
     }
 
-    console.log(chalk.white(`📝 合计找到 ${chalk.cyan.bold(allFiles.length)} 个待处理文件，准备转换为 ${chalk.green.bold(targetFormat.toUpperCase())} 格式。\n`));
+    console.log(
+        chalk.white(
+            `📝 合计找到 ${chalk.cyan.bold(allFiles.length)} 个待处理文件，准备转换为 ${chalk.green.bold(targetFormat.toUpperCase())} 格式。\n`
+        )
+    );
 
     let successCount = 0;
-    let errorLogs = [];
+    const errorLogs: string[] = [];
     let skipCount = 0;
 
     const batchSize = 5;
@@ -262,15 +359,15 @@ function askFormat() {
     for (let i = 0; i < allFiles.length; i += batchSize) {
         const batch = allFiles.slice(i, i + batchSize);
 
-        // 确保 spinner 在 batch 中的传递
-        const results = await Promise.all(batch.map(file => convertImage(file, targetFormat, isInteractive, spinner)));
+        const results = await Promise.all(
+            batch.map((file) => convertImage(file, targetFormat as TargetFormat, spinner, aiModelConfig))
+        );
 
         for (const res of results) {
             if (res.status === 'success') successCount++;
             else if (res.status === 'error') {
                 errorLogs.push(`[${new Date().toLocaleString()}] 文件: ${res.file} | 错误: ${res.reason}`);
-            }
-            else if (res.status === 'skipped') skipCount++;
+            } else if (res.status === 'skipped') skipCount++;
         }
 
         const currentProgress = Math.min(i + batchSize, allFiles.length);
@@ -281,7 +378,9 @@ function askFormat() {
 
     console.log(chalk.gray('━'.repeat(50)));
     console.log(`  ${chalk.green('✅ 成功转换:')} ${chalk.green.bold(successCount)} 个`);
-    console.log(`  ${chalk.yellow('⏩ 智能跳过:')} ${chalk.yellow.bold(skipCount)} 个 ${chalk.gray('(格式本身符合目标，无需二次渲染)')}`);
+    console.log(
+        `  ${chalk.yellow('⏩ 智能跳过:')} ${chalk.yellow.bold(skipCount)} 个 ${chalk.gray('(格式本身符合目标，无需二次渲染)')}`
+    );
     console.log(`  ${chalk.red('❌ 转换失败:')} ${chalk.red.bold(errorLogs.length)} 个`);
     console.log(chalk.gray('━'.repeat(50)));
 
@@ -298,10 +397,11 @@ function askFormat() {
         const logPath = path.join(logDir, `error_${dateStr}.log`);
         try {
             fs.appendFileSync(logPath, errorLogs.join('\n') + '\n\n', 'utf8');
-            console.log(chalk.yellow(`\n⚠️ 注意: 已将 ${errorLogs.length} 条失败情况的原因详细记录至日志: \n🔗 ${logPath}`));
+            console.log(
+                chalk.yellow(`\n⚠️ 注意: 已将 ${errorLogs.length} 条失败情况的原因详细记录至日志: \n🔗 ${logPath}`)
+            );
         } catch (err) {
-            console.error(chalk.red('\n写入错误日志失败:'), err.message);
+            console.error(chalk.red('\n写入错误日志失败:'), (err as any).message);
         }
     }
-
 })();

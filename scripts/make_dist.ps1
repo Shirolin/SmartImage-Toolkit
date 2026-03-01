@@ -38,12 +38,22 @@ try {
 # 3. 复制核心代码和依赖
 Write-Host "⚙️ [处理中] 正在打包程序组件和预装依赖 (node_modules)..." -ForegroundColor Yellow
 
+# 编译 TypeScript 生产版本
+Write-Host "⚙️ [处理中] 正在执行 TypeScript 终极质量检验与编译..." -ForegroundColor Yellow
+Set-Location -Path $RootDir
+npm run build
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "❌ [错误] TypeScript 代码结构未通过规范性或类型检查，打包终止！" -ForegroundColor Red
+    pause
+    exit
+}
+
 # 创建目标二级目录
-New-Item -ItemType Directory -Path (Join-Path $DistDir "src") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $DistDir "lib") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $DistDir "scripts") -Force | Out-Null
 
 $ItemsToCopy = @(
-    "src/convert.js",
+    "lib/convert.js",
     "run.bat",
     "run_interactive.bat",
     "scripts/install.ps1",

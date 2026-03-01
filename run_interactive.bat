@@ -30,7 +30,8 @@ call npm install --silent
 if %errorlevel% neq 0 goto :NPM_FAILED
 
 :RUN_NODE
-"%NODE_EXE%" src\convert.js --interactive %*
+:: 运行阶段：利用 ts-node 无缝执行 TypeScript
+call "%CD%\node_modules\.bin\ts-node.cmd" src\convert.ts --interactive %*
 
 if %errorlevel% neq 0 goto :RUN_ERROR
 

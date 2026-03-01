@@ -1,0 +1,12 @@
+
+C:\Users\shiro\Tools\SmartImage-Toolkit\src\convert.ts
+   29:14  error    'err' is defined but never used           @typescript-eslint/no-unused-vars
+   29:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   48:22  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   96:36  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  147:27  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  173:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  399:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+鉁?7 problems (1 error, 6 warnings)
+
