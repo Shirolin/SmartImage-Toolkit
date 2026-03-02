@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import fs from 'fs';
 import path from 'path';
+import url from 'url';
 import readline from 'readline';
 import { removeBackground } from '@imgly/background-removal-node';
 
@@ -39,7 +40,7 @@ export interface ConvertResult {
 }
 
 export type TargetFormat = 'webp' | 'png' | 'avif' | 'mozjpeg' | 'rmbg_solid';
-export type AiModel = 'large' | 'medium' | 'small';
+export type AiModel = 'medium' | 'small';
 
 // @ts-ignore 因为 Ora 的 Type 可能有些版本差异
 async function convertImage(
@@ -104,6 +105,10 @@ async function convertImage(
                 const inputBlob = new Blob([normalizedBuffer as any], { type: 'image/png' });
 
                 const blob = await removeBackground(inputBlob as any, {
+                    publicPath:
+                        url.pathToFileURL(
+                            path.join(__dirname, '..', 'node_modules', '@imgly', 'background-removal-node', 'dist')
+                        ).href + '/',
                     model: aiModel,
                     output: {
                         format: 'image/x-rgba8', // 【核心修改】提取 100% 无损原生像素数组，禁止内部执行二次由于PNG编码导致的色彩重采样
@@ -241,13 +246,10 @@ function askFormat(): Promise<InteractiveResolution> {
                         );
                         console.log(chalk.gray('━'.repeat(50)));
                         console.log(
-                            `  ${chalk.yellow.bold('1.')} ${chalk.white.bold('极致高细度 (Large)')}   ${chalk.gray('=> 速度稍慢，最适合【复杂边缘、动物毛发、发丝】')}`
+                            `  ${chalk.green.bold('1.')} ${chalk.white.bold('均衡模式 (Medium)')}    ${chalk.gray('=> 默认推荐，速度与画质绝佳平衡，最适合【复杂边缘、动物毛发、日常人像】')}`
                         );
                         console.log(
-                            `  ${chalk.green.bold('2.')} ${chalk.white.bold('均衡模式 (Medium)')}    ${chalk.gray('=> 默认推荐，速度与质量绝佳平衡，适合【日常或人像及物品对象】')}`
-                        );
-                        console.log(
-                            `  ${chalk.cyan.bold('3.')} ${chalk.white.bold('闪电极速 (Small)')}     ${chalk.gray('=> 速度极快，适合批量抠图和【边界明显的小图片】')}`
+                            `  ${chalk.cyan.bold('2.')} ${chalk.white.bold('闪电极速 (Small)')}     ${chalk.gray('=> 速度极快，节省内存资源，适合【边界明显的简单图片与大批量处理】')}`
                         );
                         console.log(chalk.gray('━'.repeat(50)));
                         const aiQuestion = () => {
@@ -255,16 +257,13 @@ function askFormat(): Promise<InteractiveResolution> {
                                 let model: AiModel = 'medium';
                                 switch (aiAnswer.trim()) {
                                     case '1':
-                                        model = 'large';
-                                        break;
-                                    case '2':
                                         model = 'medium';
                                         break;
-                                    case '3':
+                                    case '2':
                                         model = 'small';
                                         break;
                                     default:
-                                        console.log(chalk.red('❌ 无效输入，请重新输入 1-3 之间的数字。'));
+                                        console.log(chalk.red('❌ 无效输入，请重新输入 1 或 2。'));
                                         return aiQuestion();
                                 }
                                 rl.close();
