@@ -24,14 +24,23 @@ New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 $NodeUrl = "https://nodejs.org/dist/v20.11.1/win-x64/node.exe"
 $NodeDest = Join-Path $BinDir "node.exe"
 
-Write-Host "🌐 [下载中] 正在从官网获取绿色版 Node.js 运行时 (约 30MB)..." -ForegroundColor Yellow
+Write-Host "🌐 [下载中] 正在从官网获取绿色版 Node.js 运行时 (约 60MB)..." -ForegroundColor Yellow
 try {
     Invoke-WebRequest -Uri $NodeUrl -OutFile $NodeDest -ErrorAction Stop
-    Write-Host "✅ [成功] Node.js 下载完成！" -ForegroundColor Green
+    
+    # 获取下载后的文件大小并严谨校验
+    $NodeSize = (Get-Item $NodeDest).Length
+    if ($NodeSize -lt 50000000) { # 若小于 50MB 极大几率为下载中断损坏件
+        Remove-Item $NodeDest -Force
+        throw "下载的文件过小 ($([math]::Round($NodeSize/1MB, 2)) MB)，疑似网络中断导致损坏。"
+    }
+
+    Write-Host "✅ [成功] Node.js 下载并校验完成！" -ForegroundColor Green
 } catch {
-    Write-Host "❌ [错误] 无法下载 Node.js。请检查网络连接。" -ForegroundColor Red
+    Write-Host "❌ [错误] 无法下载完整版 Node.js: $_" -ForegroundColor Red
+    if (Test-Path $NodeDest) { Remove-Item $NodeDest -Force }
     Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show("下载 Node.js 失败，请检查网络连接后重试！", "打包失败", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    [System.Windows.Forms.MessageBox]::Show("下载 Node.js 失败或文件损坏，请检查网络连接后重试！`n`n错误信息: $_", "打包失败", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     exit
 }
 
