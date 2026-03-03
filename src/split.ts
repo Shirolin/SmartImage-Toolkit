@@ -6,6 +6,7 @@ export interface SplitOptions {
     rows: number;
     cols: number;
     centerMode?: 'none' | 'keep_ratio' | 'square';
+    edgeShave?: number;
 }
 
 export interface SplitResult {
@@ -93,9 +94,25 @@ export async function splitImage(
                         const b = data[2];
                         const alpha = info.channels === 4 ? data[3] / 255 : 1;
 
+                        // 0. 边缘杂边消除 (Edge Shaving)
+                        // 若原图含有不易察觉的切分线网格 (如极淡的灰色1px线条)，会阻碍 trim 的寻路
+                        // 依据用户选择，安全向内剃去指定的边缘像素厚度
+                        const shave = options.edgeShave || 0;
+                        const shavedBuffer =
+                            shave > 0 && tileWidth > shave * 2 && tileHeight > shave * 2
+                                ? await sharp(tileBuffer)
+                                      .extract({
+                                          left: shave,
+                                          top: shave,
+                                          width: tileWidth - shave * 2,
+                                          height: tileHeight - shave * 2
+                                      })
+                                      .toBuffer()
+                                : tileBuffer;
+
                         // 1. 修剪空白边缘 (此步骤丢弃所有纯白或透明的边缘填充)
                         // threshold=40 容差可以吃掉很多肉眼看不见但阻碍算作空白的 WebP/JPEG 压缩噪波点 (如 #Fdfdfd)
-                        const trimmedBuffer = await sharp(tileBuffer)
+                        const trimmedBuffer = await sharp(shavedBuffer)
                             .trim({
                                 background: { r, g, b, alpha },
                                 threshold: 40
