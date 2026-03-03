@@ -1,7 +1,7 @@
 import readline from 'readline';
 import chalk from 'chalk';
 
-export type TargetFormat = 'webp' | 'png' | 'avif' | 'mozjpeg' | 'rmbg_solid' | 'split';
+export type TargetFormat = 'webp' | 'png' | 'avif' | 'mozjpeg' | 'rmbg_solid' | 'split' | 'resize';
 export type AiModel = 'medium' | 'small';
 
 export interface SplitConfig {
@@ -13,10 +13,20 @@ export interface SplitConfig {
     debugGrid?: boolean; // 是否额外输出带红蓝指示线的可视化排查切分基准图
 }
 
+export interface ResizeConfig {
+    mode: 'by_width' | 'by_height' | 'by_percent' | 'custom';
+    width?: number;
+    height?: number;
+    percent?: number;
+    fit?: 'cover' | 'contain' | 'fill' | 'inside';
+    outputFormat?: 'original' | 'webp' | 'png' | 'mozjpeg';
+}
+
 export interface InteractiveResolution {
     format: TargetFormat;
     aiModel?: AiModel;
     splitConfig?: SplitConfig; // 针对切片操作附加参数
+    resizeConfig?: ResizeConfig; // 针对缩放操作附加参数
 }
 
 interface Choice<T> {
@@ -168,6 +178,13 @@ export async function askFormat(): Promise<InteractiveResolution> {
             description: '表情包/雪碧图按网格切分',
             value: 'split',
             titleColor: chalk.cyan.bold
+        },
+        {
+            key: '7',
+            title: '批量缩放',
+            description: '按比例或像素批量调整大小',
+            value: 'resize',
+            titleColor: chalk.blue.bold
         },
         {
             key: '0',
@@ -389,6 +406,186 @@ export async function askFormat(): Promise<InteractiveResolution> {
                     edgeShave,
                     debugGrid
                 }
+            };
+        }
+
+        if (selectedFormat === 'resize') {
+            renderHeader('主界面 > 批量缩放 (1/3) - 缩放模式');
+            const resizeModeMessage = `${chalk.blue.bold('📏 请选择批量缩放的基准模式')}:\n${chalk.gray('  ? 缩放模式:')}`;
+            const resizeModeChoices: Choice<'by_width' | 'by_height' | 'by_percent' | 'custom' | 'back'>[] = [
+                {
+                    key: '1',
+                    title: '按宽度缩放',
+                    description: '指定宽度，高度等比自适应',
+                    value: 'by_width',
+                    titleColor: chalk.cyan.bold
+                },
+                {
+                    key: '2',
+                    title: '按高度缩放',
+                    description: '指定高度，宽度等比自适应',
+                    value: 'by_height',
+                    titleColor: chalk.cyan.bold
+                },
+                {
+                    key: '3',
+                    title: '按百分比缩放',
+                    description: '等比例缩放整体大小',
+                    value: 'by_percent',
+                    titleColor: chalk.cyan.bold
+                },
+                {
+                    key: '4',
+                    title: '自定义宽高',
+                    description: '强制指定宽高度 (含多种适配策略)',
+                    value: 'custom',
+                    titleColor: chalk.magenta.bold
+                },
+                {
+                    key: '0',
+                    title: '返回上一级',
+                    description: '重新选择特效方案',
+                    value: 'back',
+                    titleColor: chalk.gray
+                }
+            ];
+
+            const resizeMode = await customSelect(resizeModeMessage, resizeModeChoices);
+            if (resizeMode === 'back') continue;
+
+            const resizeConfig: ResizeConfig = {
+                mode: resizeMode as 'by_width' | 'by_height' | 'by_percent' | 'custom'
+            };
+
+            renderHeader('主界面 > 批量缩放 (2/3) - 尺寸参数');
+
+            if (resizeMode === 'by_width') {
+                while (true) {
+                    const ans = await askQuestion(
+                        chalk.cyan('  ? 【目标宽度】: 请输入想要缩放到的宽度像素值(例如 800): ')
+                    );
+                    const val = parseInt(ans, 10);
+                    if (!isNaN(val) && val > 0) {
+                        resizeConfig.width = val;
+                        break;
+                    }
+                    console.log(chalk.red('❌ 无效的输入。请输入大于 0 的数字。'));
+                }
+            } else if (resizeMode === 'by_height') {
+                while (true) {
+                    const ans = await askQuestion(
+                        chalk.cyan('  ? 【目标高度】: 请输入想要缩放到的高度像素值(例如 600): ')
+                    );
+                    const val = parseInt(ans, 10);
+                    if (!isNaN(val) && val > 0) {
+                        resizeConfig.height = val;
+                        break;
+                    }
+                    console.log(chalk.red('❌ 无效的输入。请输入大于 0 的数字。'));
+                }
+            } else if (resizeMode === 'by_percent') {
+                while (true) {
+                    const ans = await askQuestion(
+                        chalk.cyan('  ? 【缩放百分比】: 请输入百分比数值 (例如 50 代表缩小到一半, 200 代表放大两倍): ')
+                    );
+                    const val = parseInt(ans, 10);
+                    if (!isNaN(val) && val > 0) {
+                        resizeConfig.percent = val;
+                        break;
+                    }
+                    console.log(chalk.red('❌ 无效的输入。请输入大于 0 的数字。'));
+                }
+            } else if (resizeMode === 'custom') {
+                while (true) {
+                    const ansW = await askQuestion(chalk.cyan('  ? 【目标宽度】: 请输入宽度像素值: '));
+                    const valW = parseInt(ansW, 10);
+                    if (!isNaN(valW) && valW > 0) {
+                        resizeConfig.width = valW;
+                        break;
+                    }
+                    console.log(chalk.red('❌ 无效的输入。请输入大于 0 的数字。'));
+                }
+                while (true) {
+                    const ansH = await askQuestion(chalk.cyan('  ? 【目标高度】: 请输入高度像素值: '));
+                    const valH = parseInt(ansH, 10);
+                    if (!isNaN(valH) && valH > 0) {
+                        resizeConfig.height = valH;
+                        break;
+                    }
+                    console.log(chalk.red('❌ 无效的输入。请输入大于 0 的数字。'));
+                }
+
+                console.log();
+                const fitMessage = `${chalk.blue.bold('📏 对于不匹配的宽高比例，请选择适配策略')}:\n${chalk.gray('  ? 适配策略:')}`;
+                const fitChoices: Choice<'cover' | 'contain' | 'fill' | 'inside'>[] = [
+                    {
+                        key: '1',
+                        title: 'Cover (默认)',
+                        description: '等比缩放并裁剪多余边缘以填满尺寸',
+                        value: 'cover',
+                        titleColor: chalk.white
+                    },
+                    {
+                        key: '2',
+                        title: 'Contain',
+                        description: '等比缩放完整保留内容，可能出现透明留白',
+                        value: 'contain',
+                        titleColor: chalk.white
+                    },
+                    {
+                        key: '3',
+                        title: 'Fill',
+                        description: '无视比例，强制拉伸或挤压至指定尺寸',
+                        value: 'fill',
+                        titleColor: chalk.white
+                    },
+                    {
+                        key: '4',
+                        title: 'Inside',
+                        description: '保留比例但决不超出，类似按最大边缩放',
+                        value: 'inside',
+                        titleColor: chalk.white
+                    }
+                ];
+                resizeConfig.fit = await customSelect(fitMessage, fitChoices);
+            }
+
+            renderHeader('主界面 > 批量缩放 (3/3) - 最终输出格式');
+            const formatMessage = `${chalk.blue.bold('📦 请选择缩放后文件的最终导出格式')}:\n${chalk.gray('  ? 导出格式:')}`;
+            const formatChoices3: Choice<'original' | 'webp' | 'png' | 'mozjpeg' | 'back'>[] = [
+                {
+                    key: '1',
+                    title: '保持原格式 (默认)',
+                    description: '沿用修改前文件的扩展名',
+                    value: 'original',
+                    titleColor: chalk.white
+                },
+                { key: '2', title: 'WebP', description: '体积最小', value: 'webp', titleColor: chalk.green.bold },
+                { key: '3', title: 'PNG', description: '无损与兼容', value: 'png', titleColor: chalk.green.bold },
+                {
+                    key: '4',
+                    title: 'JPG (MozJPEG)',
+                    description: '照片常用',
+                    value: 'mozjpeg',
+                    titleColor: chalk.green.bold
+                },
+                {
+                    key: '0',
+                    title: '返回重新填写参数',
+                    description: '返回修改缩放参数',
+                    value: 'back',
+                    titleColor: chalk.gray
+                }
+            ];
+            const outputFormat = await customSelect(formatMessage, formatChoices3);
+
+            if (outputFormat === 'back') continue;
+            resizeConfig.outputFormat = outputFormat as 'original' | 'webp' | 'png' | 'mozjpeg';
+
+            console.clear();
+            return {
+                format: 'resize',
+                resizeConfig
             };
         }
 

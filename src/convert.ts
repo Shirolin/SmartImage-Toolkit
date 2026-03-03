@@ -4,9 +4,10 @@ import ora from 'ora';
 import chalk from 'chalk';
 
 import { getFiles } from './utils';
-import { askFormat, TargetFormat, AiModel, SplitConfig } from './cli';
+import { askFormat, TargetFormat, AiModel, SplitConfig, ResizeConfig } from './cli';
 import { convertImage } from './core';
 import { splitImage } from './split';
+import { resizeImage } from './resize';
 
 (async () => {
     let args = process.argv.slice(2);
@@ -14,6 +15,7 @@ import { splitImage } from './split';
     let targetFormat: TargetFormat | string = 'webp'; // 默认格式
     let aiModelConfig: AiModel = 'medium'; // 默认模型
     let splitConfig: SplitConfig | undefined;
+    let resizeConfig: ResizeConfig | undefined;
 
     if (args.includes('--interactive')) {
         isInteractive = true;
@@ -42,6 +44,7 @@ import { splitImage } from './split';
         targetFormat = resolution.format;
         if (resolution.aiModel) aiModelConfig = resolution.aiModel;
         if (resolution.splitConfig) splitConfig = resolution.splitConfig;
+        if (resolution.resizeConfig) resizeConfig = resolution.resizeConfig;
     }
 
     console.log(chalk.cyan('\n====================================================================================='));
@@ -68,7 +71,11 @@ import { splitImage } from './split';
             `📝 合计找到 ${chalk.cyan.bold(allFiles.length)} 个待处理文件，准备执行 ${
                 targetFormat === 'split'
                     ? chalk.cyan.bold(`[智能网格切割] -> ${splitConfig?.exportFormat.toUpperCase()}`)
-                    : chalk.green.bold(`[格式转换] -> ${targetFormat.toUpperCase()}`)
+                    : targetFormat === 'resize'
+                      ? chalk.blue.bold(
+                            `[批量缩放] -> ${resizeConfig?.outputFormat === 'original' ? '保持原格式' : resizeConfig?.outputFormat?.toUpperCase()}`
+                        )
+                      : chalk.green.bold(`[格式转换] -> ${targetFormat.toUpperCase()}`)
             }。`
         )
     );
@@ -109,6 +116,17 @@ import { splitImage } from './split';
                         file: splitRes.file,
                         reason: splitRes.reason,
                         generatedCount: splitRes.generatedFiles.length
+                    };
+                } else if (targetFormat === 'resize' && resizeConfig) {
+                    const formatExt =
+                        resizeConfig.outputFormat === 'original'
+                            ? null
+                            : (`.${resizeConfig.outputFormat}` as '.webp' | '.png' | '.jpg' | null);
+                    const res = await resizeImage(file, resizeConfig, formatExt);
+                    return {
+                        status: res.status,
+                        file: res.file,
+                        reason: res.reason
                     };
                 } else {
                     return await convertImage(file, targetFormat as TargetFormat, coreSpinner, aiModelConfig);
