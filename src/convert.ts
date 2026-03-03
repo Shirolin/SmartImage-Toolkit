@@ -44,9 +44,9 @@ import { splitImage } from './split';
         if (resolution.splitConfig) splitConfig = resolution.splitConfig;
     }
 
-    console.log(chalk.cyan('\n=================================================='));
+    console.log(chalk.cyan('\n====================================================================================='));
     console.log(chalk.yellow('🔍 正在检索系统文件，如果文件较多可能需要一点时间...'));
-    console.log(chalk.cyan('==================================================\n'));
+    console.log(chalk.cyan('=====================================================================================\n'));
 
     let allFiles: string[] = [];
     for (const arg of args) {
@@ -134,13 +134,13 @@ import { splitImage } from './split';
 
     spinner.succeed(chalk.green.bold(`✨ 魔法完成！所有图片均已通过极速引擎处理完毕。`));
 
-    console.log(chalk.gray('━'.repeat(50)));
+    console.log(chalk.gray('━'.repeat(85)));
     console.log(`  ${chalk.green('✅ 成功转换:')} ${chalk.green.bold(successCount)} 个`);
     console.log(
         `  ${chalk.yellow('⏩ 智能跳过:')} ${chalk.yellow.bold(skipCount)} 个 ${chalk.gray('(格式本身符合目标，无需二次渲染)')}`
     );
     console.log(`  ${chalk.red('❌ 转换失败:')} ${chalk.red.bold(errorLogs.length)} 个`);
-    console.log(chalk.gray('━'.repeat(50)));
+    console.log(chalk.gray('━'.repeat(85)));
 
     if (errorLogs.length > 0) {
         const logDir = path.join(process.cwd(), 'log');

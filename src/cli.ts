@@ -29,9 +29,9 @@ interface Choice<T> {
 
 function renderHeader(breadcrumb: string) {
     console.clear();
-    console.log(chalk.gray('=================================================================='));
-    console.log(chalk.bold.white(' 🎨 SmartImage-Toolkit (交互模式版)'));
-    console.log(chalk.gray('==================================================================\n'));
+    console.log(chalk.gray('====================================================================================='));
+    console.log(chalk.bold.white('   🎨 SmartImage-Toolkit (交互模式版)'));
+    console.log(chalk.gray('=====================================================================================\n'));
     console.log(`${chalk.gray('📍 当前位置:')} ${chalk.cyan(breadcrumb)}\n`);
 }
 
@@ -124,55 +124,55 @@ async function customSelect<T>(message: string, choices: Choice<T>[]): Promise<T
 }
 
 export async function askFormat(): Promise<InteractiveResolution> {
-    const message = `\n${chalk.cyan.bold('🎨 请使用【上下键(↑↓)】浏览，或按【数字】一步直达，无须回车即可确认')}:\n${chalk.gray('  ? 特效方案:')}`;
+    const message = `\n${chalk.cyan.bold('🎨 上下键浏览，数字键直达，回车确认')}:\n${chalk.gray('  ? 特效方案:')}`;
 
     const formatChoices: Choice<TargetFormat | 'cancel'>[] = [
         {
             key: '1',
-            title: 'WebP      ',
-            description: '=> 极佳的体积和画质平衡，推荐用于网页',
+            title: 'WebP',
+            description: '体积与画质平衡，推荐',
             value: 'webp',
             titleColor: chalk.green.bold
         },
         {
             key: '2',
-            title: 'PNG       ',
-            description: '=> 极度压缩版本，最高系统兼容性并保留透明度',
+            title: 'PNG',
+            description: '无损压缩，保留透明度',
             value: 'png',
             titleColor: chalk.green.bold
         },
         {
             key: '3',
-            title: 'AVIF      ',
-            description: '=> 最硬核顶级压缩率，体积最小，适合现代设备',
+            title: 'AVIF',
+            description: '顶级压缩率，适合现代设备',
             value: 'avif',
             titleColor: chalk.green.bold
         },
         {
             key: '4',
-            title: 'MozJPEG   ',
-            description: '=> 最好的 JPG 有损压缩，AI 和旧设备 100% 兼容',
+            title: 'MozJPEG',
+            description: 'JPG 有损压缩，兼容性最高',
             value: 'mozjpeg',
             titleColor: chalk.green.bold
         },
         {
             key: '5',
-            title: 'AI 抠图   ',
-            description: '=> 智能分离主体，输出去除背景的高清透明图片',
+            title: 'AI 抠图',
+            description: '智能去除背景，输出透明图',
             value: 'rmbg_solid',
             titleColor: chalk.magenta.bold
         },
         {
             key: '6',
-            title: '图像切片  ',
-            description: '=> 将各种表情包或雪碧图按网格切分成多小块',
+            title: '图像切片',
+            description: '表情包/雪碧图按网格切分',
             value: 'split',
             titleColor: chalk.cyan.bold
         },
         {
             key: '0',
-            title: '取消退出  ',
-            description: '=> 放弃转换并退出程序',
+            title: '取消退出',
+            description: '退出程序',
             value: 'cancel',
             titleColor: chalk.red.bold
         }
@@ -190,26 +190,26 @@ export async function askFormat(): Promise<InteractiveResolution> {
 
         if (selectedFormat === 'rmbg_solid') {
             renderHeader('主界面 > AI 抠图');
-            const aiMessage = `${chalk.magenta.bold('🧠 请同样地选出您青睐的 AI 抠图精细度')}:\n${chalk.gray('  ? 运行级别:')}`;
+            const aiMessage = `${chalk.magenta.bold('🧠 选择 AI 抠图精细度')}:\n${chalk.gray('  ? 运行级别:')}`;
             const aiChoices: Choice<AiModel | 'back'>[] = [
                 {
                     key: '1',
                     title: '均衡模式 (Medium)',
-                    description: '=> 速度与画质绝佳平衡，适合【复杂边缘/一般人像】',
+                    description: '适合复杂边缘和人像',
                     value: 'medium',
                     titleColor: chalk.white.bold
                 },
                 {
                     key: '2',
-                    title: '闪电极速 (Small) ',
-                    description: '=> 速度极快省资源，适合【简单边界/大批量计算】',
+                    title: '极速模式 (Small)',
+                    description: '速度快，适合大批量',
                     value: 'small',
                     titleColor: chalk.white.bold
                 },
                 {
                     key: '0',
-                    title: '返回上一级       ',
-                    description: '=> 重新选择特效方案',
+                    title: '返回上一级',
+                    description: '重新选择特效方案',
                     value: 'back',
                     titleColor: chalk.gray
                 }
@@ -271,32 +271,32 @@ export async function askFormat(): Promise<InteractiveResolution> {
             if (exportFormat === 'back') continue;
 
             renderHeader('主界面 > 图像切片 (3/4) - 智能居中设定');
-            const centerMessage = `${chalk.cyan.bold('🎯 是否对每个切片图进行【主体智能居中】？')}:\n${chalk.gray('  ? 居中模式:')}`;
+            const centerMessage = `${chalk.cyan.bold('🎯 是否对切片进行智能居中？')}:\n${chalk.gray('  ? 居中模式:')}`;
             const centerChoices: Choice<'none' | 'keep_ratio' | 'square' | 'back'>[] = [
                 {
                     key: '1',
                     title: '不居中 (原样切除)',
-                    description: '保持原图上的物理网格绝对位置',
+                    description: '保持物理网格原样输出',
                     value: 'none',
                     titleColor: chalk.white
                 },
                 {
                     key: '2',
-                    title: '居中 - 保持原比例 (推荐)',
-                    description: '自动寻找表情主体并将它重新居中在原本宽高的画布里',
+                    title: '居中 - 保持原比例',
+                    description: '主体居中，保持原宽高',
                     value: 'keep_ratio',
                     titleColor: chalk.green.bold
                 },
                 {
                     key: '3',
-                    title: '居中 - 生成正方形 ',
-                    description: '自动寻找主体，并强制输出为长宽一致的正方形图片',
+                    title: '居中 - 正方形输出',
+                    description: '主体居中，输出为正方形',
                     value: 'square',
                     titleColor: chalk.cyan.bold
                 },
                 {
                     key: '0',
-                    title: '返回上一级        ',
+                    title: '返回上一级',
                     description: '重新选择导出格式',
                     value: 'back',
                     titleColor: chalk.gray
@@ -309,30 +309,27 @@ export async function askFormat(): Promise<InteractiveResolution> {
             let edgeShave = 0;
             if (centerMode !== 'none') {
                 renderHeader('主界面 > 图像切片 (4/4) - 边缘去噪保护');
-                console.log(
-                    chalk.cyan.bold('🔪 (高级项) 是否需要向内收缩切片边缘，以摧毁遗留网格线/邻居越界重叠图案？\n')
-                );
+                console.log(chalk.cyan.bold('🔪 是否需要向内收缩切片边缘？\n'));
                 const shaveMessage = chalk.gray('? 边缘去噪保护:');
                 const shaveChoices: Choice<number>[] = [
                     {
                         key: '1',
-                        title: '不需要 (默认，完全保护图案本体)',
-                        description: '原画间隙很完美，图案离边界很远，不需要刮肉。',
+                        title: '不收缩 (默认)',
+                        description: '图案间隙干净，无残留',
                         value: 0,
                         titleColor: chalk.green.bold
                     },
                     {
                         key: '2',
-                        title: '轻微收缩 (刮去 2 像素)  ',
-                        description: '适用于偶尔出现的极细小瑕疵、肉眼看不清的生成图边缘伪影。',
+                        title: '收缩 2 像素',
+                        description: '去除极细微的边缘伪影',
                         value: 2,
                         titleColor: chalk.yellow.bold
                     },
                     {
                         key: '3',
-                        title: '自定义强力收缩 (手动输入像素)',
-                        description:
-                            '【强烈建议】当原画图案拥挤或越界，切出来的图总是带上邻居的手脚时，请使用此项加大收缩。',
+                        title: '自定义收缩距离',
+                        description: '切到邻居图案时加大此值',
                         value: -1,
                         titleColor: chalk.red.bold
                     }
@@ -343,8 +340,7 @@ export async function askFormat(): Promise<InteractiveResolution> {
                     let validPad = false;
                     while (!validPad) {
                         const padInput = await askQuestion(
-                            chalk.cyan.bold('\n🔪 请输入要切除的边缘向内收缩范围: ') +
-                                chalk.gray('(建议输入 5~20 之间的正整数) ')
+                            chalk.cyan.bold('\n🔪 输入收缩像素数 ') + chalk.gray('(1-100，建议 5~20): ')
                         );
                         const padParsed = parseInt(padInput, 10);
                         if (!isNaN(padParsed) && padParsed >= 1 && padParsed <= 100) {
@@ -362,20 +358,20 @@ export async function askFormat(): Promise<InteractiveResolution> {
             let debugGrid = false;
             // 因为生成参照图很有用，所以独立于中心居中作为最后一步提问
             renderHeader(`主界面 > 图像切片 (${centerMode !== 'none' ? '5/5' : '4/4'}) - 辅助诊断模式`);
-            console.log(chalk.cyan.bold('🩺 (附加项) 是否需要额外生成一张【全图切割蓝贴标尺参考图】？\n'));
+            console.log(chalk.cyan.bold('🩺 是否额外生成一张切割对齐参考图？\n'));
             const debugMessage = chalk.gray('? 附带生成辅助对齐网格:');
             const debugChoices: Choice<boolean>[] = [
                 {
                     key: '1',
-                    title: '不需要 (默认，仅输出切好的图)',
-                    description: '',
+                    title: '不需要 (默认)',
+                    description: '仅输出切好的图',
                     value: false,
                     titleColor: chalk.white
                 },
                 {
                     key: '2',
-                    title: '额外生成蓝贴标尺参考图 (强推)',
-                    description: '如果您怀疑原图排版是歪的，或者行/列数切出来带邻居边缘，可用该图诊断。',
+                    title: '生成标尺参考图',
+                    description: '排查切割是否对齐',
                     value: true,
                     titleColor: chalk.yellow.bold
                 }
