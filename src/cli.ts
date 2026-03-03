@@ -10,6 +10,7 @@ export interface SplitConfig {
     exportFormat: 'webp' | 'png' | 'mozjpeg'; // 切片导出格式
     centerMode?: 'none' | 'keep_ratio' | 'square'; // 居中裁剪策略
     edgeShave?: number; // 边缘向内削减像素数
+    debugGrid?: boolean; // 是否额外输出带红蓝指示线的可视化排查切分基准图
 }
 
 export interface InteractiveResolution {
@@ -308,26 +309,78 @@ export async function askFormat(): Promise<InteractiveResolution> {
             let edgeShave = 0;
             if (centerMode !== 'none') {
                 renderHeader('主界面 > 图像切片 (4/4) - 边缘去噪保护');
-                const shaveMessage = `${chalk.cyan.bold('🔪 (高级项) 是否需要稍微向内收缩 2 个像素，以摧毁遗留的网格线毛刺？')}\n${chalk.gray('  ? 边缘去噪保护:')}`;
+                console.log(
+                    chalk.cyan.bold('🔪 (高级项) 是否需要向内收缩切片边缘，以摧毁遗留网格线/邻居越界重叠图案？\n')
+                );
+                const shaveMessage = chalk.gray('? 边缘去噪保护:');
                 const shaveChoices: Choice<number>[] = [
                     {
                         key: '1',
                         title: '不需要 (默认，完全保护图案本体)',
-                        description: '原画已经足够干净没有瑕疵，或者图案离切边非常近，不能再往内刮。',
+                        description: '原画间隙很完美，图案离边界很远，不需要刮肉。',
                         value: 0,
                         titleColor: chalk.green.bold
                     },
                     {
                         key: '2',
-                        title: '收缩 2 像素以消除微弱网格线  ',
-                        description:
-                            '有时候 AI 生成图带有肉眼看不清的缝隙网格线，它会阻挡智能居中心算法。这会让其消失。',
+                        title: '轻微收缩 (刮去 2 像素)  ',
+                        description: '适用于偶尔出现的极细小瑕疵、肉眼看不清的生成图边缘伪影。',
                         value: 2,
                         titleColor: chalk.yellow.bold
+                    },
+                    {
+                        key: '3',
+                        title: '自定义强力收缩 (手动输入像素)',
+                        description:
+                            '【强烈建议】当原画图案拥挤或越界，切出来的图总是带上邻居的手脚时，请使用此项加大收缩。',
+                        value: -1,
+                        titleColor: chalk.red.bold
                     }
                 ];
-                edgeShave = await customSelect(shaveMessage, shaveChoices);
+                const shaveChoice = await customSelect(shaveMessage, shaveChoices);
+
+                if (shaveChoice === -1) {
+                    let validPad = false;
+                    while (!validPad) {
+                        const padInput = await askQuestion(
+                            chalk.cyan.bold('\n🔪 请输入要切除的边缘向内收缩范围: ') +
+                                chalk.gray('(建议输入 5~20 之间的正整数) ')
+                        );
+                        const padParsed = parseInt(padInput, 10);
+                        if (!isNaN(padParsed) && padParsed >= 1 && padParsed <= 100) {
+                            edgeShave = padParsed;
+                            validPad = true;
+                        } else {
+                            console.log(chalk.red('❌ 无效的输入。请输入 1-100 之间的整数。'));
+                        }
+                    }
+                } else {
+                    edgeShave = shaveChoice;
+                }
             }
+
+            let debugGrid = false;
+            // 因为生成参照图很有用，所以独立于中心居中作为最后一步提问
+            renderHeader(`主界面 > 图像切片 (${centerMode !== 'none' ? '5/5' : '4/4'}) - 辅助诊断模式`);
+            console.log(chalk.cyan.bold('🩺 (附加项) 是否需要额外生成一张【全图切割蓝贴标尺参考图】？\n'));
+            const debugMessage = chalk.gray('? 附带生成辅助对齐网格:');
+            const debugChoices: Choice<boolean>[] = [
+                {
+                    key: '1',
+                    title: '不需要 (默认，仅输出切好的图)',
+                    description: '',
+                    value: false,
+                    titleColor: chalk.white
+                },
+                {
+                    key: '2',
+                    title: '额外生成蓝贴标尺参考图 (强推)',
+                    description: '如果您怀疑原图排版是歪的，或者行/列数切出来带邻居边缘，可用该图诊断。',
+                    value: true,
+                    titleColor: chalk.yellow.bold
+                }
+            ];
+            debugGrid = await customSelect(debugMessage, debugChoices);
 
             console.clear();
             return {
@@ -337,7 +390,8 @@ export async function askFormat(): Promise<InteractiveResolution> {
                     cols,
                     exportFormat: exportFormat as 'webp' | 'png' | 'mozjpeg',
                     centerMode: centerMode as 'none' | 'keep_ratio' | 'square',
-                    edgeShave
+                    edgeShave,
+                    debugGrid
                 }
             };
         }
