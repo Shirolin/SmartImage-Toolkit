@@ -1,12 +1,20 @@
 import readline from 'readline';
 import chalk from 'chalk';
 
-export type TargetFormat = 'webp' | 'png' | 'avif' | 'mozjpeg' | 'rmbg_solid';
+export type TargetFormat = 'webp' | 'png' | 'avif' | 'mozjpeg' | 'rmbg_solid' | 'split';
 export type AiModel = 'medium' | 'small';
+
+export interface SplitConfig {
+    rows: number;
+    cols: number;
+    exportFormat: 'webp' | 'png' | 'mozjpeg'; // 切片导出格式
+    centerMode?: 'none' | 'keep_ratio' | 'square'; // 居中裁剪策略
+}
 
 export interface InteractiveResolution {
     format: TargetFormat;
     aiModel?: AiModel;
+    splitConfig?: SplitConfig; // 针对切片操作附加参数
 }
 
 interface Choice<T> {
@@ -145,6 +153,13 @@ export async function askFormat(): Promise<InteractiveResolution> {
             titleColor: chalk.magenta.bold
         },
         {
+            key: '6',
+            title: '图像切片  ',
+            description: '=> 将各种表情包或雪碧图按网格切分成多小块',
+            value: 'split',
+            titleColor: chalk.cyan.bold
+        },
+        {
             key: '0',
             title: '取消退出  ',
             description: '=> 放弃转换并退出程序',
@@ -153,35 +168,163 @@ export async function askFormat(): Promise<InteractiveResolution> {
         }
     ];
 
-    const selectedFormat = await customSelect(message, formatChoices);
+    while (true) {
+        const selectedFormat = await customSelect(message, formatChoices);
 
-    if (selectedFormat === 'cancel') {
-        process.stdout.write('\x1B[1A\x1B[J'); // 清理控制台残余
-        console.log(chalk.red('👋 操作已取消。'));
-        process.exit(0);
-    }
+        if (selectedFormat === 'cancel') {
+            process.stdout.write('\x1B[1A\x1B[J'); // 清理控制台残余
+            console.log(chalk.red('👋 操作已取消。'));
+            process.exit(0);
+        }
 
-    if (selectedFormat === 'rmbg_solid') {
-        const aiMessage = `${chalk.magenta.bold('🧠 请同样地选出您青睐的 AI 抠图精细度')}:\n${chalk.gray('  ? 运行级别:')}`;
-        const aiChoices: Choice<AiModel>[] = [
-            {
-                key: '1',
-                title: '均衡模式 (Medium)',
-                description: '=> 速度与画质绝佳平衡，适合【复杂边缘/一般人像】',
-                value: 'medium',
-                titleColor: chalk.white.bold
-            },
-            {
-                key: '2',
-                title: '闪电极速 (Small) ',
-                description: '=> 速度极快省资源，适合【简单边界/大批量计算】',
-                value: 'small',
-                titleColor: chalk.white.bold
+        if (selectedFormat === 'rmbg_solid') {
+            const aiMessage = `${chalk.magenta.bold('🧠 请同样地选出您青睐的 AI 抠图精细度')}:\n${chalk.gray('  ? 运行级别:')}`;
+            const aiChoices: Choice<AiModel | 'back'>[] = [
+                {
+                    key: '1',
+                    title: '均衡模式 (Medium)',
+                    description: '=> 速度与画质绝佳平衡，适合【复杂边缘/一般人像】',
+                    value: 'medium',
+                    titleColor: chalk.white.bold
+                },
+                {
+                    key: '2',
+                    title: '闪电极速 (Small) ',
+                    description: '=> 速度极快省资源，适合【简单边界/大批量计算】',
+                    value: 'small',
+                    titleColor: chalk.white.bold
+                },
+                {
+                    key: '0',
+                    title: '返回上一级       ',
+                    description: '=> 重新选择特效方案',
+                    value: 'back',
+                    titleColor: chalk.gray
+                }
+            ];
+            const aiModel = await customSelect(aiMessage, aiChoices);
+
+            if (aiModel === 'back') continue;
+
+            return { format: 'rmbg_solid', aiModel: aiModel as AiModel };
+        }
+
+        if (selectedFormat === 'split') {
+            console.log(
+                chalk.cyan.bold(
+                    '\n✂️ 请依次输入切片的【列数(X轴)】与【行数(Y轴)】 (若要返回上级菜单，请输入 0 并回车):'
+                )
+            );
+
+            const colStr = await askQuestion(
+                chalk.cyan('  ? 【列数】: 横向有几列表情？(也就是 X 轴，直接回车默认 4): ')
+            );
+            if (colStr.trim() === '0') {
+                console.log();
+                continue;
             }
-        ];
-        const aiModel = await customSelect(aiMessage, aiChoices);
-        return { format: 'rmbg_solid', aiModel };
-    }
+            const cols = parseInt(colStr, 10) || 4;
 
-    return { format: selectedFormat as TargetFormat };
+            const rowStr = await askQuestion(
+                chalk.cyan('  ? 【行数】: 纵向有几排表情？(也就是 Y 轴，直接回车默认 4): ')
+            );
+            if (rowStr.trim() === '0') {
+                console.log(); // 空行过渡
+                continue;
+            }
+            const rows = parseInt(rowStr, 10) || 4;
+
+            console.log(chalk.green(`✔️ 已确认该图包含: 横向 ${cols} 列 × 纵向 ${rows} 排 (行)，将为您精准切割。\n`));
+
+            const formatMessage = `${chalk.cyan.bold('📦 请选择切片文件的最终导出格式')}:\n${chalk.gray('  ? 导出格式:')}`;
+            const formatChoices2: Choice<'webp' | 'png' | 'mozjpeg' | 'back'>[] = [
+                { key: '1', title: 'WebP', description: '体积最小', value: 'webp', titleColor: chalk.green.bold },
+                { key: '2', title: 'PNG', description: '无损与兼容', value: 'png', titleColor: chalk.green.bold },
+                {
+                    key: '3',
+                    title: 'JPG (MozJPEG)',
+                    description: '照片常用',
+                    value: 'mozjpeg',
+                    titleColor: chalk.green.bold
+                },
+                {
+                    key: '0',
+                    title: '返回上一级   ',
+                    description: '返回重填切割数值',
+                    value: 'back',
+                    titleColor: chalk.gray
+                }
+            ];
+            const exportFormat = await customSelect(formatMessage, formatChoices2);
+
+            if (exportFormat === 'back') {
+                console.log();
+                continue;
+            }
+
+            const centerMessage = `${chalk.cyan.bold('🎯 是否对每个切片图进行【主体智能居中】？')}:\n${chalk.gray('  ? 居中模式:')}`;
+            const centerChoices: Choice<'none' | 'keep_ratio' | 'square' | 'back'>[] = [
+                {
+                    key: '1',
+                    title: '不居中 (原样切除)',
+                    description: '保持原图上的物理网格绝对位置',
+                    value: 'none',
+                    titleColor: chalk.white
+                },
+                {
+                    key: '2',
+                    title: '居中 - 保持原比例 (推荐)',
+                    description: '自动寻找表情主体并将它重新居中在原本宽高的画布里',
+                    value: 'keep_ratio',
+                    titleColor: chalk.green.bold
+                },
+                {
+                    key: '3',
+                    title: '居中 - 生成正方形 ',
+                    description: '自动寻找主体，并强制输出为长宽一致的正方形图片',
+                    value: 'square',
+                    titleColor: chalk.cyan.bold
+                },
+                {
+                    key: '0',
+                    title: '返回上一级        ',
+                    description: '重新选择导出格式',
+                    value: 'back',
+                    titleColor: chalk.gray
+                }
+            ];
+            const centerMode = await customSelect(centerMessage, centerChoices);
+
+            if (centerMode === 'back') {
+                console.log();
+                continue;
+            }
+
+            return {
+                format: 'split',
+                splitConfig: {
+                    rows,
+                    cols,
+                    exportFormat: exportFormat as 'webp' | 'png' | 'mozjpeg',
+                    centerMode: centerMode as 'none' | 'keep_ratio' | 'square'
+                }
+            };
+        }
+
+        return { format: selectedFormat as TargetFormat };
+    }
+}
+
+// 供简易输入使用的辅助函数
+function askQuestion(query: string): Promise<string> {
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+    return new Promise((resolve) =>
+        rl.question(query, (ans) => {
+            rl.close();
+            resolve(ans.trim());
+        })
+    );
 }

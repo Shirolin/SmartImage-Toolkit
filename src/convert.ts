@@ -4,14 +4,16 @@ import ora from 'ora';
 import chalk from 'chalk';
 
 import { getFiles } from './utils';
-import { askFormat, TargetFormat, AiModel } from './cli';
+import { askFormat, TargetFormat, AiModel, SplitConfig } from './cli';
 import { convertImage } from './core';
+import { splitImage } from './split';
 
 (async () => {
     let args = process.argv.slice(2);
     let isInteractive = false;
     let targetFormat: TargetFormat | string = 'webp'; // 默认格式
     let aiModelConfig: AiModel = 'medium'; // 默认模型
+    let splitConfig: SplitConfig | undefined;
 
     if (args.includes('--interactive')) {
         isInteractive = true;
@@ -39,6 +41,7 @@ import { convertImage } from './core';
         const resolution = await askFormat();
         targetFormat = resolution.format;
         if (resolution.aiModel) aiModelConfig = resolution.aiModel;
+        if (resolution.splitConfig) splitConfig = resolution.splitConfig;
     }
 
     console.log(chalk.cyan('\n=================================================='));
@@ -62,7 +65,11 @@ import { convertImage } from './core';
 
     console.log(
         chalk.white(
-            `📝 合计找到 ${chalk.cyan.bold(allFiles.length)} 个待处理文件，准备转换为 ${chalk.green.bold(targetFormat.toUpperCase())} 格式。\n`
+            `📝 合计找到 ${chalk.cyan.bold(allFiles.length)} 个待处理文件，准备执行 ${
+                targetFormat === 'split'
+                    ? chalk.cyan.bold(`[智能网格切割] -> ${splitConfig?.exportFormat.toUpperCase()}`)
+                    : chalk.green.bold(`[格式转换] -> ${targetFormat.toUpperCase()}`)
+            }。`
         )
     );
 
@@ -93,12 +100,30 @@ import { convertImage } from './core';
         const batch = allFiles.slice(i, i + batchSize);
 
         const results = await Promise.all(
-            batch.map((file) => convertImage(file, targetFormat as TargetFormat, coreSpinner, aiModelConfig))
+            batch.map(async (file) => {
+                if (targetFormat === 'split' && splitConfig) {
+                    const ext = `.${splitConfig.exportFormat}` as '.webp' | '.png' | '.jpg';
+                    const splitRes = await splitImage(file, splitConfig, ext);
+                    return {
+                        status: splitRes.status,
+                        file: splitRes.file,
+                        reason: splitRes.reason,
+                        generatedCount: splitRes.generatedFiles.length
+                    };
+                } else {
+                    return await convertImage(file, targetFormat as TargetFormat, coreSpinner, aiModelConfig);
+                }
+            })
         );
 
         for (const res of results) {
-            if (res.status === 'success') successCount++;
-            else if (res.status === 'error') {
+            if (res.status === 'success') {
+                if ('generatedCount' in res && typeof res.generatedCount === 'number') {
+                    successCount += res.generatedCount; // 切片模式下增加的是碎片总数
+                } else {
+                    successCount++;
+                }
+            } else if (res.status === 'error') {
                 errorLogs.push(`[${new Date().toLocaleString()}] 文件: ${res.file} | 错误: ${res.reason}`);
             } else if (res.status === 'skipped') skipCount++;
         }
