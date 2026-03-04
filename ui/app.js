@@ -41,6 +41,10 @@ let startPanY = 0;
 let currentMode = 'v'; // 'v' | 'h' | 'p' (vertical, horizontal, pan)
 let isSpacePressed = false;
 
+// 辅助线配色状态
+let guideColorX = '#00e5ff';
+let guideColorY = '#ff2a6d';
+
 // 吸附状态
 const SNAP_THRESHOLD = 8; // 像素阈值（图片坐标空间内）
 let snapIndicator = null; // { axis: 'x'|'y', value: number } 当前吸附的参考线
@@ -444,6 +448,25 @@ window.addEventListener('mouseup', () => {
     draw();
 });
 
+// 辅助线配色交互
+document.querySelectorAll('#colorOptionsX .color-swatch').forEach(swatch => {
+    swatch.addEventListener('click', () => {
+        document.querySelectorAll('#colorOptionsX .color-swatch').forEach(s => s.classList.remove('active'));
+        swatch.classList.add('active');
+        guideColorX = swatch.dataset.color;
+        draw();
+    });
+});
+
+document.querySelectorAll('#colorOptionsY .color-swatch').forEach(swatch => {
+    swatch.addEventListener('click', () => {
+        document.querySelectorAll('#colorOptionsY .color-swatch').forEach(s => s.classList.remove('active'));
+        swatch.classList.add('active');
+        guideColorY = swatch.dataset.color;
+        draw();
+    });
+});
+
 // 滚轮缩放
 window.addEventListener('wheel', (e) => {
     if (e.target.closest('.main-content')) {
@@ -488,7 +511,7 @@ function draw() {
             ctx.beginPath();
             ctx.moveTo(xPos, 0);
             ctx.lineTo(xPos, imgHeight);
-            ctx.strokeStyle = '#00e5ff'; // 霓虹青色
+            ctx.strokeStyle = guideColorX; // 动态配色
             ctx.lineWidth = visualWidth;
             ctx.setLineDash([8 / scale, 8 / scale]);
             ctx.stroke();
@@ -506,7 +529,7 @@ function draw() {
             ctx.beginPath();
             ctx.moveTo(0, yPos);
             ctx.lineTo(imgWidth, yPos);
-            ctx.strokeStyle = '#ff2a6d'; // 霓虹粉红
+            ctx.strokeStyle = guideColorY; // 动态配色
             ctx.lineWidth = visualWidth;
             ctx.setLineDash([8 / scale, 8 / scale]);
             ctx.stroke();
