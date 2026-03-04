@@ -9,34 +9,114 @@
 <body>
     <div class="container">
         <div class="sidebar">
-            <h1 class="title">✂️ 自由切图</h1>
+            <header class="sidebar-header">
+                <div class="logo-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+                </div>
+                <h1 class="title">SmartImage</h1>
+            </header>
             
-            <div class="control-group">
-                <label>绝对路径:</label>
-                <input type="text" id="imgPathInput" placeholder="请输入本地图片的绝对路径">
-                <button id="loadBtn" class="primary-btn">加载图片</button>
+            <div class="control-panel">
+                <div class="control-group">
+                    <div class="compact-input-group">
+                        <div class="input-container">
+                            <svg class="input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                            <input type="text" id="imgPathInput" placeholder="输入路径或直接拖入图片...">
+                        </div>
+                        <button id="loadBtn" class="capsule-btn" title="选择本地图片">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: block; flex-shrink: 0;"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="instruction-card">
+                    <div class="card-header">
+                        <div class="header-left">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                            <span>点击模式</span>
+                        </div>
+                    </div>
+
+                    <!-- 分段选择器：直观展示当前点击会添加什么方向的线 -->
+                    <div class="mode-selector">
+                        <button id="modeVertical" class="mode-btn active" title="点击画布添加竖向辅助线">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="3" x2="12" y2="21"/><polyline points="8 8 12 4 16 8"/><polyline points="16 16 12 20 8 16"/></svg>
+                            <span>竖线</span>
+                        </button>
+                        <button id="modeHorizontal" class="mode-btn" title="点击画布添加横向辅助线">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><polyline points="8 8 4 12 8 16"/><polyline points="16 16 20 12 16 8"/></svg>
+                            <span>横线</span>
+                        </button>
+                        <button id="modePan" class="mode-btn" title="点击并按住左键平移图片">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v5"/><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v10"/><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+                            <span>平移</span>
+                        </button>
+                    </div>
+
+                    <ul class="guide-list">
+                        <li><span class="guide-key">空格+拖拽</span> 临时抓手平移图片</li>
+                        <li><span class="guide-key">平移模式</span> 左键直接拖拽图片</li>
+                        <li><span class="guide-key">添加线</span> 在对应模式下点击画布</li>
+                        <li><span class="guide-key">Alt+点击</span> 快速添加另一方向线</li>
+                    </ul>
+                </div>
+
+                <!-- 等分工具 -->
+                <div class="instruction-card">
+                    <div class="card-header">
+                        <div class="header-left">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/></svg>
+                            <span>快速等分</span>
+                        </div>
+                    </div>
+                    <div class="divide-row">
+                        <div class="divide-field">
+                            <label>行</label>
+                            <input type="number" id="divideRows" min="1" max="50" value="1" placeholder="1">
+                        </div>
+                        <span class="divide-separator">×</span>
+                        <div class="divide-field">
+                            <label>列</label>
+                            <input type="number" id="divideCols" min="1" max="50" value="1" placeholder="1">
+                        </div>
+                        <button id="applyDivideBtn" class="divide-apply-btn" title="应用等分">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        </button>
+                    </div>
+                </div>
             </div>
 
-            <div class="control-group info-group">
-                <p>操作说明：</p>
-                <ul>
-                    <li>点击图片添加<strong>竖直</strong>辅助线</li>
-                    <li>按住 <code>Alt</code> 点击添加<strong>水平</strong>辅助线</li>
-                    <li>拖拽已有的辅助线可以移动位置</li>
-                    <li>双击辅助线可以进行删除</li>
-                </ul>
-            </div>
-
-            <div class="bottom-actions">
-                <button id="splitBtn" class="action-btn" disabled>立刻切割</button>
-                <button id="exitBtn" class="exit-btn">退出</button>
+            <div class="footer-actions">
+                <button id="splitBtn" class="primary-btn" disabled>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h18"/><path d="M7 8l-4 4 4 4"/><path d="M17 8l4 4-4 4"/><path d="M12 3v18"/></svg>
+                    立刻切割产物
+                </button>
+                <button id="exitBtn" class="danger-btn" title="退出服务">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                </button>
             </div>
             <div id="statusMsg" class="status-msg"></div>
         </div>
         <div class="main-content">
+            <!-- 浮动交互工具栏 -->
+            <div class="preview-toolbar">
+                <button id="zoomOutBtn" title="缩小 (Ctrl + -)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                </button>
+                <span id="zoomPercent">100%</span>
+                <button id="zoomInBtn" title="放大 (Ctrl + +)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                </button>
+                <div class="toolbar-divider"></div>
+                <button id="resetViewBtn" title="自适应屏幕 (Ctrl + 0)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                </button>
+            </div>
             <div class="canvas-container" id="canvasWrapper">
                 <canvas id="editorCanvas"></canvas>
             </div>
+            <!-- 吸附放大镜 -->
+            <canvas id="magnifier" class="magnifier-canvas" width="150" height="150"></canvas>
         </div>
     </div>
     <script src="app.js"></script>
