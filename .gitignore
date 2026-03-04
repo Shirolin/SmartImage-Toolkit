@@ -4,4 +4,4 @@ log/
 bin/
 *.log
 .DS_Store
-.agents/
+.agent/
