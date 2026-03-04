@@ -5,6 +5,8 @@ import path from 'path';
 export interface SplitOptions {
     rows: number;
     cols: number;
+    cutX?: number[]; // 自定义垂直切割线 (X坐标), 升序排列，例如 [0, 300, 700, 1000]
+    cutY?: number[]; // 自定义水平切割线 (Y坐标), 升序排列，例如 [0, 500, 1000]
     centerMode?: 'none' | 'keep_ratio' | 'square';
     edgeShave?: number;
     debugGrid?: boolean;
@@ -63,15 +65,31 @@ export async function splitImage(
                 <rect x="${offsetLeft}" y="${offsetTop}" width="${contentWidth}" height="${contentHeight}" fill="none" stroke="red" stroke-width="4"/>`;
         }
 
-        for (let row = 0; row < options.rows; row++) {
-            for (let col = 0; col < options.cols; col++) {
+        const useCustomCuts =
+            Array.isArray(options.cutX) &&
+            Array.isArray(options.cutY) &&
+            options.cutX.length >= 2 &&
+            options.cutY.length >= 2;
+        const totalRows = useCustomCuts ? options.cutY!.length - 1 : options.rows;
+        const totalCols = useCustomCuts ? options.cutX!.length - 1 : options.cols;
+
+        for (let row = 0; row < totalRows; row++) {
+            for (let col = 0; col < totalCols; col++) {
                 // 结合两大核武级别防偏算法:
                 // 1. 限定在 offsetLeft/Top 计算的 "内容封包区" 内部运作
                 // 2. 采用针对 contentWidth/Height 的百分比端点映射计算，根绝浮点像素吃边漂移
-                const innerLeft = Math.round((col * contentWidth) / options.cols);
-                const innerRight = Math.round(((col + 1) * contentWidth) / options.cols);
-                const innerTop = Math.round((row * contentHeight) / options.rows);
-                const innerBottom = Math.round(((row + 1) * contentHeight) / options.rows);
+                let innerLeft, innerRight, innerTop, innerBottom;
+                if (useCustomCuts) {
+                    innerLeft = options.cutX![col];
+                    innerRight = options.cutX![col + 1];
+                    innerTop = options.cutY![row];
+                    innerBottom = options.cutY![row + 1];
+                } else {
+                    innerLeft = Math.round((col * contentWidth) / options.cols);
+                    innerRight = Math.round(((col + 1) * contentWidth) / options.cols);
+                    innerTop = Math.round((row * contentHeight) / options.rows);
+                    innerBottom = Math.round(((row + 1) * contentHeight) / options.rows);
+                }
 
                 const left = offsetLeft + innerLeft;
                 const top = offsetTop + innerTop;

@@ -60,11 +60,20 @@ if ($LASTEXITCODE -ne 0) {
 # 创建目标二级目录
 New-Item -ItemType Directory -Path (Join-Path $DistDir "lib") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $DistDir "scripts") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $DistDir "ui") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $DistDir "src") -Force | Out-Null
 
 $ItemsToCopy = @(
     "lib/convert.js",
     "run.bat",
     "run_interactive.bat",
+    "start-ui.bat",
+    "bootstrap.js",
+    "ui/index.html",
+    "ui/style.css",
+    "ui/app.js",
+    "src/server.ts",
+    "src/split.ts",
     "scripts/install.ps1",
     "scripts/uninstall.ps1",
     "package.json",

@@ -1,0 +1,171 @@
+:root {
+    --bg-color: #1a1a2e;
+    --panel-bg: #16213e;
+    --text-color: #e94560;
+    --border-color: #0f3460;
+    --accent-color: #e94560;
+    --white: #ffffff;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--white);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.container {
+    display: flex;
+    height: 100%;
+}
+
+.sidebar {
+    width: 350px;
+    background-color: var(--panel-bg);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.5);
+    z-index: 10;
+}
+
+.title {
+    color: var(--text-color);
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 20px;
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+input[type="text"] {
+    padding: 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: #0f3460;
+    color: white;
+    outline: none;
+}
+
+input[type="text"]:focus {
+    border-color: var(--accent-color);
+}
+
+button {
+    padding: 10px 15px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: all 0.2s ease;
+}
+
+.primary-btn {
+    background-color: #0f3460;
+    color: white;
+}
+
+.primary-btn:hover {
+    background-color: #1a4a82;
+}
+
+.bottom-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: auto;
+}
+
+.action-btn {
+    flex: 1;
+    background-color: var(--accent-color);
+    color: white;
+    font-size: 16px;
+    padding: 15px;
+}
+
+.exit-btn {
+    background-color: #333;
+    color: #ccc;
+    font-size: 16px;
+    padding: 15px;
+    border: 1px solid #555;
+}
+
+.exit-btn:hover {
+    background-color: #f87171;
+    color: white;
+    border-color: #f87171;
+}
+
+.action-btn:hover:not(:disabled) {
+    background-color: #ff5c77;
+    box-shadow: 0 0 15px rgba(233, 69, 96, 0.4);
+}
+
+.action-btn:disabled {
+    background-color: #555;
+    cursor: not-allowed;
+    color: #999;
+}
+
+.info-group {
+    background: rgba(15, 52, 96, 0.5);
+    padding: 15px;
+    border-radius: 8px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #ccc;
+}
+
+.info-group ul {
+    margin-top: 10px;
+    padding-left: 20px;
+}
+
+.main-content {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #111;
+    padding: 30px;
+}
+
+.canvas-container {
+    position: relative;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+    background: #222;
+}
+
+#editorCanvas {
+    display: block;
+    cursor: crosshair;
+}
+
+.status-msg {
+    text-align: center;
+    min-height: 20px;
+    font-size: 14px;
+    word-break: break-all;
+}
+
+.success {
+    color: #4ade80;
+}
+
+.error {
+    color: #f87171;
+}

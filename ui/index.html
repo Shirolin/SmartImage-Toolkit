@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartImage 自由切图</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <h1 class="title">✂️ 自由切图</h1>
+            
+            <div class="control-group">
+                <label>绝对路径:</label>
+                <input type="text" id="imgPathInput" placeholder="请输入本地图片的绝对路径">
+                <button id="loadBtn" class="primary-btn">加载图片</button>
+            </div>
+
+            <div class="control-group info-group">
+                <p>操作说明：</p>
+                <ul>
+                    <li>点击图片添加<strong>竖直</strong>辅助线</li>
+                    <li>按住 <code>Alt</code> 点击添加<strong>水平</strong>辅助线</li>
+                    <li>拖拽已有的辅助线可以移动位置</li>
+                    <li>双击辅助线可以进行删除</li>
+                </ul>
+            </div>
+
+            <div class="bottom-actions">
+                <button id="splitBtn" class="action-btn" disabled>立刻切割</button>
+                <button id="exitBtn" class="exit-btn">退出</button>
+            </div>
+            <div id="statusMsg" class="status-msg"></div>
+        </div>
+        <div class="main-content">
+            <div class="canvas-container" id="canvasWrapper">
+                <canvas id="editorCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 ﻿$SendToPath = [System.IO.Path]::Combine($env:APPDATA, "Microsoft\Windows\SendTo")
 $ShortcutPathWebP = Join-Path $SendToPath "转成 WebP.lnk"
 $ShortcutPathInteractive = Join-Path $SendToPath "更多图片转换处理.lnk"
+$ShortcutPathUI = Join-Path $SendToPath "界面切图(SmartImage).lnk"
 
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "  🗑️ SmartImage-Toolkit 卸载向导" -ForegroundColor Cyan
@@ -17,6 +18,11 @@ if (Test-Path $ShortcutPathWebP) {
 if (Test-Path $ShortcutPathInteractive) {
     Remove-Item $ShortcutPathInteractive -Force
     Write-Host "🧹 [清理] 已移除 '发送到 -> 更多图片转换处理' 快捷方式" -ForegroundColor Gray
+}
+
+if (Test-Path $ShortcutPathUI) {
+    Remove-Item $ShortcutPathUI -Force
+    Write-Host "🧹 [清理] 已移除 '发送到 -> 界面切图(SmartImage)' 快捷方式" -ForegroundColor Gray
 }
 
 # 兼容性清理：移除旧版本遗留的名为“转成更多图片格式”的快捷方式
