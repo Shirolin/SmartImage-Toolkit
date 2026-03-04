@@ -83,15 +83,32 @@ app.get('/api/heartbeat', (req, res) => {
 });
 
 app.get('/api/open-file-dialog', (req, res) => {
-    // 性能优化：使用 -NoProfile 减少初始加载，并精简 PS 指令
-    const cmd = `powershell -NoProfile -Command "[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'Images|*.png;*.jpg;*.jpeg;*.webp;*.gif'; if($f.ShowDialog() -eq 'OK') { $f.FileName }"`;
+    // 强制 PowerShell 使用 UTF-8 编码输出，并设置 [Console]::OutputEncoding 解决中文字符集乱码
+    const psCommand = `
+        $OutputEncoding = [System.Text.Encoding]::UTF8;
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;
+        [void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms');
+        $objForm = New-Object System.Windows.Forms.OpenFileDialog;
+        $objForm.Filter = 'Images|*.png;*.jpg;*.jpeg;*.webp;*.gif|All Files|*.*';
+        $objForm.Title = '选择图片';
+        if ($objForm.ShowDialog() -eq 'OK') {
+            Write-Host $objForm.FileName
+        }
+    `
+        .replace(/\n/g, ' ')
+        .trim();
 
-    exec(cmd, (error, stdout, stderr) => {
+    // 在 Windows 上通过 chcp 65001 强制切换子进程代码页为 UTF-8
+    const cmd = `chcp 65001 >nul && powershell -NoProfile -ExecutionPolicy Bypass -Command "${psCommand}"`;
+
+    console.log('正在执行文件对话框指令 (UTF-8)...');
+    exec(cmd, { encoding: 'utf8' }, (error, stdout) => {
         if (error) {
-            console.error('PowerShell 错误:', stderr);
-            return res.status(500).json({ success: false, error: '无法启动文件搜索器' });
+            console.error('PowerShell 运行错误:', error.message);
+            return res.status(500).json({ success: false, error: '无法调起文件搜索器' });
         }
         const filePath = stdout.trim();
+        console.log('获取到的文件路径:', filePath);
         res.json({ success: true, path: filePath });
     });
 });

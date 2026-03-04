@@ -121,7 +121,8 @@ body {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    padding: 3px;
+    padding: 3px 8px 3px 3px;
+    /* 进一步增加右侧边距，确保不超出圆角 */
     transition: var(--transition-base);
     height: 42px;
     /* 固定高度确保对齐 */
@@ -163,8 +164,9 @@ body {
 }
 
 .capsule-btn {
-    width: 34px;
-    height: 34px;
+    width: 32px;
+    /* 减小尺寸以便更好地嵌入圆角区域 */
+    height: 32px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -203,7 +205,8 @@ body {
 .card-header {
     display: flex;
     align-items: center;
-    gap: 10px;
+    justify-content: space-between;
+    /* 允许标题和开关分布在两侧 */
     margin-bottom: 12px;
     /* 紧凑标题 */
     color: var(--text-main);
@@ -598,6 +601,59 @@ body.drag-active::after {
 .magnifier-canvas.snapped {
     border-color: #facc15;
     box-shadow: 0 0 12px rgba(250, 204, 21, 0.3), 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+
+/* --- 自定义 Switch 开关 --- */
+.switch-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.switch-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.switch-container input {
+    display: none;
+}
+
+.switch-slider {
+    position: relative;
+    width: 28px;
+    height: 16px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    transition: var(--transition-base);
+    border: 1px solid var(--border-color);
+}
+
+.switch-slider::before {
+    content: "";
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    left: 2px;
+    bottom: 2px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: var(--transition-base);
+}
+
+.switch-container input:checked+.switch-slider {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.switch-container input:checked+.switch-slider::before {
+    transform: translateX(12px);
+    background: white;
 }
 
 /* --- 颜色选择器样式 --- */

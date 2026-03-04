@@ -20,6 +20,7 @@ const modePanBtn = document.getElementById('modePan');
 const divideRowsInput = document.getElementById('divideRows');
 const divideColsInput = document.getElementById('divideCols');
 const applyDivideBtn = document.getElementById('applyDivideBtn');
+const snapToggle = document.getElementById('snapToggle'); // 吸附开关
 
 // 放大镜
 const magnifier = document.getElementById('magnifier');
@@ -46,7 +47,8 @@ let guideColorX = '#00e5ff';
 let guideColorY = '#ff2a6d';
 
 // 吸附状态
-const SNAP_THRESHOLD = 8; // 像素阈值（图片坐标空间内）
+const BASE_SNAP_THRESHOLD = 12; // 屏幕像素阈值
+let isSnapEnabled = true; // 吸附是否开启
 let snapIndicator = null; // { axis: 'x'|'y', value: number } 当前吸附的参考线
 
 const lines = {
@@ -74,6 +76,11 @@ function setMode(mode) {
 modeVerticalBtn.addEventListener('click', () => setMode('v'));
 modeHorizontalBtn.addEventListener('click', () => setMode('h'));
 modePanBtn.addEventListener('click', () => setMode('p'));
+
+snapToggle.addEventListener('change', (e) => {
+    isSnapEnabled = e.target.checked;
+    showStatus(isSnapEnabled ? '智能吸附已开启' : '智能吸附已暂时禁用', 'success');
+});
 
 // 等分功能
 applyDivideBtn.addEventListener('click', () => {
@@ -105,15 +112,20 @@ function applyEqualDivide(rows, cols) {
 
 // 智能吸附
 function snapToNearest(value, axis) {
+    if (!isSnapEnabled) {
+        snapIndicator = null;
+        return value;
+    }
     const max = axis === 'x' ? imgWidth : imgHeight;
     const otherLines = lines[axis];
     let bestTarget = null;
-    let bestDist = SNAP_THRESHOLD;
+    let bestDist = BASE_SNAP_THRESHOLD / scale; // 动态计算图像空间内的阈值
 
     // 收集吸附目标：所有同轴线 + 边界
     const targets = [0, max];
     for (let i = 0; i < otherLines.length; i++) {
-        if (otherLines[i] !== value) targets.push(otherLines[i]);
+        // 如果是正在拖拽的线，需要排除自身当前位置（通常 value 就是当前位置，所以这里判断一下）
+        if (Math.abs(otherLines[i] - value) > 0.1) targets.push(otherLines[i]);
     }
 
     for (const t of targets) {
@@ -391,11 +403,17 @@ canvas.addEventListener('mousedown', (e) => {
     let useHorizontal = currentMode === 'h';
     if (e.altKey) useHorizontal = !useHorizontal;
 
+    const axis = useHorizontal ? 'y' : 'x';
+    const rawValue = useHorizontal ? pos.y : pos.x;
+
+    // 应用吸附逻辑
+    const snappedValue = snapToNearest(rawValue, axis);
+
     if (useHorizontal) {
-        lines.y.push(pos.y);
+        lines.y.push(snappedValue);
         lines.y.sort((a, b) => a - b);
     } else {
-        lines.x.push(pos.x);
+        lines.x.push(snappedValue);
         lines.x.sort((a, b) => a - b);
     }
     draw();
