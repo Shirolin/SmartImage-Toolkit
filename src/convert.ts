@@ -4,10 +4,11 @@ import ora from 'ora';
 import chalk from 'chalk';
 
 import { getFiles } from './utils';
-import { askFormat, TargetFormat, AiModel, SplitConfig, ResizeConfig } from './cli';
+import { askFormat, TargetFormat, AiModel, SplitConfig, ResizeConfig, TrimConfig, CropConfig } from './cli';
 import { convertImage } from './core';
 import { splitImage } from './split';
 import { resizeImage } from './resize';
+import { processTrimOrCrop } from './trim';
 
 (async () => {
     let args = process.argv.slice(2);
@@ -16,6 +17,8 @@ import { resizeImage } from './resize';
     let aiModelConfig: AiModel = 'medium'; // 默认模型
     let splitConfig: SplitConfig | undefined;
     let resizeConfig: ResizeConfig | undefined;
+    let trimConfig: TrimConfig | undefined;
+    let cropConfig: CropConfig | undefined;
 
     if (args.includes('--interactive')) {
         isInteractive = true;
@@ -25,6 +28,14 @@ import { resizeImage } from './resize';
         if (formatIndex !== -1 && args[formatIndex + 1]) {
             targetFormat = args[formatIndex + 1];
             args.splice(formatIndex, 2);
+
+            if (targetFormat === 'trim') {
+                trimConfig = {
+                    threshold: 10,
+                    sides: ['top', 'bottom', 'left', 'right'],
+                    outputFormat: 'original'
+                };
+            }
         }
 
         const aiModelIndex = args.indexOf('--ai-model');
@@ -45,6 +56,8 @@ import { resizeImage } from './resize';
         if (resolution.aiModel) aiModelConfig = resolution.aiModel;
         if (resolution.splitConfig) splitConfig = resolution.splitConfig;
         if (resolution.resizeConfig) resizeConfig = resolution.resizeConfig;
+        if (resolution.trimConfig) trimConfig = resolution.trimConfig;
+        if (resolution.cropConfig) cropConfig = resolution.cropConfig;
     }
 
     console.log(chalk.cyan('\n====================================================================================='));
@@ -75,7 +88,11 @@ import { resizeImage } from './resize';
                       ? chalk.blue.bold(
                             `[批量缩放] -> ${resizeConfig?.outputFormat === 'original' ? '保持原格式' : resizeConfig?.outputFormat?.toUpperCase()}`
                         )
-                      : chalk.green.bold(`[格式转换] -> ${targetFormat.toUpperCase()}`)
+                      : targetFormat === 'trim'
+                        ? chalk.yellow.bold(`[智能去边(Trim)]`)
+                        : targetFormat === 'crop'
+                          ? chalk.yellow.bold(`[手动裁剪(Crop)]`)
+                          : chalk.green.bold(`[格式转换] -> ${targetFormat.toUpperCase()}`)
             }。`
         )
     );
@@ -128,6 +145,14 @@ import { resizeImage } from './resize';
                         file: res.file,
                         reason: res.reason
                     };
+                } else if (targetFormat === 'trim' && trimConfig) {
+                    const formatExt = trimConfig.outputFormat === 'original' ? null : `.${trimConfig.outputFormat}`;
+                    const res = await processTrimOrCrop(file, 'trim', trimConfig, formatExt);
+                    return res;
+                } else if (targetFormat === 'crop' && cropConfig) {
+                    const formatExt = cropConfig.outputFormat === 'original' ? null : `.${cropConfig.outputFormat}`;
+                    const res = await processTrimOrCrop(file, 'crop', cropConfig, formatExt);
+                    return res;
                 } else {
                     return await convertImage(file, targetFormat as TargetFormat, coreSpinner, aiModelConfig);
                 }
