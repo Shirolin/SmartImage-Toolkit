@@ -21,12 +21,18 @@ export async function processTrimOrCrop(
     const name = path.basename(filePath, ext);
 
     const actualExt = formatExt || ext.toLowerCase();
-    const suffix = action === 'trim' ? '_trimmed' : '_cropped';
+    const isTrim = action === 'trim';
+    const subDirName = isTrim ? 'trimmed' : 'cropped';
+    const outDir = path.join(dir, subDirName);
 
-    let outputPath = path.join(dir, `${name}${suffix}${actualExt}`);
+    if (!fs.existsSync(outDir)) {
+        fs.mkdirSync(outDir, { recursive: true });
+    }
+
+    let outputPath = path.join(outDir, `${name}${actualExt}`);
     let counter = 1;
     while (fs.existsSync(outputPath)) {
-        outputPath = path.join(dir, `${name}${suffix}(${counter})${actualExt}`);
+        outputPath = path.join(outDir, `${name}(${counter})${actualExt}`);
         counter++;
     }
 
