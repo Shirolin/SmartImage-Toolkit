@@ -4,11 +4,21 @@ import ora from 'ora';
 import chalk from 'chalk';
 
 import { getFiles } from './utils';
-import { askFormat, TargetFormat, AiModel, SplitConfig, ResizeConfig, TrimConfig, CropConfig } from './cli';
+import {
+    askFormat,
+    TargetFormat,
+    AiModel,
+    SplitConfig,
+    ResizeConfig,
+    TrimConfig,
+    CropConfig,
+    CenterConfig
+} from './cli';
 import { convertImage } from './core';
 import { splitImage } from './split';
 import { resizeImage } from './resize';
 import { processTrimOrCrop } from './trim';
+import { processCenter } from './center';
 
 (async () => {
     let args = process.argv.slice(2);
@@ -19,6 +29,7 @@ import { processTrimOrCrop } from './trim';
     let resizeConfig: ResizeConfig | undefined;
     let trimConfig: TrimConfig | undefined;
     let cropConfig: CropConfig | undefined;
+    let centerConfig: CenterConfig | undefined;
 
     if (args.includes('--interactive')) {
         isInteractive = true;
@@ -33,6 +44,13 @@ import { processTrimOrCrop } from './trim';
                 trimConfig = {
                     threshold: 10,
                     sides: ['top', 'bottom', 'left', 'right'],
+                    outputFormat: 'original'
+                };
+            }
+            if (targetFormat === 'center') {
+                centerConfig = {
+                    threshold: 10,
+                    fillColor: 'transparent',
                     outputFormat: 'original'
                 };
             }
@@ -58,6 +76,7 @@ import { processTrimOrCrop } from './trim';
         if (resolution.resizeConfig) resizeConfig = resolution.resizeConfig;
         if (resolution.trimConfig) trimConfig = resolution.trimConfig;
         if (resolution.cropConfig) cropConfig = resolution.cropConfig;
+        if (resolution.centerConfig) centerConfig = resolution.centerConfig;
     }
 
     console.log(chalk.cyan('\n====================================================================================='));
@@ -92,7 +111,9 @@ import { processTrimOrCrop } from './trim';
                         ? chalk.yellow.bold(`[智能去边(Trim)]`)
                         : targetFormat === 'crop'
                           ? chalk.yellow.bold(`[手动裁剪(Crop)]`)
-                          : chalk.green.bold(`[格式转换] -> ${targetFormat.toUpperCase()}`)
+                          : targetFormat === 'center'
+                            ? chalk.magenta.bold(`[智能居中(Smart Center)]`)
+                            : chalk.green.bold(`[格式转换] -> ${targetFormat.toUpperCase()}`)
             }。`
         )
     );
@@ -152,6 +173,10 @@ import { processTrimOrCrop } from './trim';
                 } else if (targetFormat === 'crop' && cropConfig) {
                     const formatExt = cropConfig.outputFormat === 'original' ? null : `.${cropConfig.outputFormat}`;
                     const res = await processTrimOrCrop(file, 'crop', cropConfig, formatExt);
+                    return res;
+                } else if (targetFormat === 'center' && centerConfig) {
+                    const formatExt = centerConfig.outputFormat === 'original' ? null : `.${centerConfig.outputFormat}`;
+                    const res = await processCenter(file, centerConfig, formatExt);
                     return res;
                 } else {
                     return await convertImage(file, targetFormat as TargetFormat, coreSpinner, aiModelConfig);

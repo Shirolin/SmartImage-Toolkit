@@ -603,6 +603,12 @@ body.drag-active::after {
     box-shadow: 0 0 12px rgba(250, 204, 21, 0.3), 0 10px 30px rgba(0, 0, 0, 0.6);
 }
 
+.path-input.path-warning {
+    border-color: #ff2a6d !important;
+    box-shadow: 0 0 10px rgba(255, 42, 109, 0.3);
+    color: #ff2a6d;
+}
+
 /* --- 自定义 Switch 开关 --- */
 .switch-container {
     display: flex;
@@ -655,6 +661,146 @@ body.drag-active::after {
     transform: translateX(12px);
     background: white;
 }
+
+/* --- 底部选项区 (废弃老的) --- */
+.center-config-card {
+    margin-top: 10px;
+    border-color: rgba(99, 102, 241, 0.2);
+    transition: var(--transition-base);
+}
+
+.center-config-card:focus-within,
+.center-config-card:hover {
+    border-color: rgba(99, 102, 241, 0.4);
+}
+
+.config-details {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.config-details.hidden {
+    display: none;
+    opacity: 0;
+    max-height: 0;
+}
+
+.config-row {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.config-row.split {
+    flex-direction: row;
+}
+
+.config-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.config-item label {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 700;
+}
+
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+input[type="range"] {
+    flex: 1;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    appearance: none;
+    cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--primary-color);
+    border-radius: 50%;
+    box-shadow: var(--shadow-glow);
+}
+
+#thresholdVal {
+    font-size: 12px;
+    color: var(--primary-color);
+    font-weight: 700;
+    min-width: 24px;
+}
+
+select {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-main);
+    padding: 8px;
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+    transition: var(--transition-base);
+}
+
+select:focus {
+    border-color: var(--primary-color);
+}
+
+.sides-selector {
+    display: flex;
+    gap: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 10px;
+    border-radius: var(--radius-sm);
+    justify-content: space-between;
+    border: 1px solid var(--border-color);
+}
+
+.sides-selector label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-main) !important;
+    cursor: pointer;
+    font-weight: 500 !important;
+}
+
+.sides-selector input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--primary-color);
+    cursor: pointer;
+}
+
+
+/* --- 底部选项区 --- */
+.footer-options {
+    padding: 0 24px;
+    margin-bottom: -16px;
+    /* 紧凑布局 */
+}
+
+.switch-container.compact .switch-label {
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 13px;
+    color: var(--text-main);
+}
+
 
 /* --- 颜色选择器样式 --- */
 .color-picker-group {

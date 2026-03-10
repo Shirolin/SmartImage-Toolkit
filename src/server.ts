@@ -3,6 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { splitImage } from './split';
+import { processCenter } from './center';
 import { exec } from 'child_process';
 
 const startTime = Date.now();
@@ -45,21 +46,39 @@ app.get('/api/load-image', (req, res) => {
 });
 
 app.post('/api/split-custom', async (req, res) => {
-    const { filePath, cutX, cutY } = req.body;
+    const { filePath: rawPath, cutX, cutY, smartCenter, centerConfig } = req.body;
 
-    if (!filePath || !cutX || !cutY) {
+    if (!rawPath || !cutX || !cutY) {
         return res.status(400).json({ success: false, error: '缺少必要参数' });
     }
 
+    const filePath = path.resolve(rawPath);
+
     try {
-        // 调用核心切图库，提供自定义坐标范围
+        // 1. 执行切割
         const result = await splitImage(filePath, {
             rows: 0,
             cols: 0,
             cutX,
             cutY
         });
+
         if (result.status === 'success') {
+            // 2. 如果开启了智能居中，对所有切片进行后处理
+            if (smartCenter) {
+                console.log(`✨ 正在对 ${result.generatedFiles?.length} 张切片执行智能居中...`);
+                // 使用前端传来的配置，如果不存在则回退至安全默认值
+                const finalConfig = centerConfig || {
+                    threshold: 10,
+                    fillColor: 'transparent',
+                    outputFormat: 'original'
+                };
+
+                for (const file of result.generatedFiles || []) {
+                    const formatExt = finalConfig.outputFormat === 'original' ? null : `.${finalConfig.outputFormat}`;
+                    await processCenter(file, finalConfig, formatExt);
+                }
+            }
             res.json({ success: true, message: '切图完成！', files: result.generatedFiles });
         } else {
             res.status(500).json({ success: false, error: result.reason });

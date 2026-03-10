@@ -1,7 +1,17 @@
 import readline from 'readline';
 import chalk from 'chalk';
 
-export type TargetFormat = 'webp' | 'png' | 'avif' | 'mozjpeg' | 'rmbg_solid' | 'split' | 'resize' | 'trim' | 'crop';
+export type TargetFormat =
+    | 'webp'
+    | 'png'
+    | 'avif'
+    | 'mozjpeg'
+    | 'rmbg_solid'
+    | 'split'
+    | 'resize'
+    | 'trim'
+    | 'crop'
+    | 'center';
 export type AiModel = 'medium' | 'small';
 
 export interface SplitConfig {
@@ -36,6 +46,13 @@ export interface CropConfig {
     outputFormat?: 'original' | 'webp' | 'png' | 'mozjpeg';
 }
 
+export interface CenterConfig {
+    threshold: number;
+    fillColor: string | 'transparent';
+    outputFormat?: 'webp' | 'png' | 'mozjpeg' | 'original';
+    sides?: ('top' | 'bottom' | 'left' | 'right')[];
+}
+
 export interface InteractiveResolution {
     format: TargetFormat;
     aiModel?: AiModel;
@@ -43,6 +60,7 @@ export interface InteractiveResolution {
     resizeConfig?: ResizeConfig; // 针对缩放操作附加参数
     trimConfig?: TrimConfig; // 针对智能去边操作附加参数
     cropConfig?: CropConfig; // 针对手动裁切操作附加参数
+    centerConfig?: CenterConfig; // 针对智能居中操作附加参数
 }
 
 interface Choice<T> {
@@ -204,17 +222,24 @@ export async function askFormat(): Promise<InteractiveResolution> {
         },
         {
             key: '8',
-            title: '边缘修剪',
-            description: '智能去底边/白边/透明边或手动裁切',
+            title: '边缘修剪 (Trim/Crop)',
+            description: '自动去白边或手动像素级切除',
             value: 'trim',
-            titleColor: chalk.yellow.bold
+            titleColor: chalk.yellow
+        },
+        {
+            key: '9',
+            title: '自动居中 (Smart Center)',
+            description: '探测主体位置并平衡边距，使内容完美居中',
+            value: 'center',
+            titleColor: chalk.magenta.bold
         },
         {
             key: '0',
-            title: '取消退出',
-            description: '退出程序',
-            value: 'cancel',
-            titleColor: chalk.red.bold
+            title: '退出程序',
+            description: '结束当前会话',
+            value: 'cancel', // Changed from 'exit' as any to 'cancel' to match existing logic
+            titleColor: chalk.gray
         }
     ];
 
@@ -419,6 +444,7 @@ export async function askFormat(): Promise<InteractiveResolution> {
             debugGrid = await customSelect(debugMessage, debugChoices);
 
             console.clear();
+
             return {
                 format: 'split',
                 splitConfig: {
@@ -767,6 +793,108 @@ export async function askFormat(): Promise<InteractiveResolution> {
                 cropConfig.outputFormat = finalFormat;
                 return { format: 'crop', cropConfig };
             }
+        }
+
+        if (selectedFormat === 'center') {
+            renderHeader('主界面 > 自动居中 (1/3) - 灵敏度设定');
+            console.log(chalk.cyan('🎯 【智能居中】将基于背景色探测主体内容 Bounding Box...'));
+
+            let validThreshold = false;
+            let threshold = 10;
+            while (!validThreshold) {
+                const thresholdInput = await askQuestion(chalk.gray('  ? 【色差容忍度】(1-100，默认回车 10): '));
+                if (thresholdInput.trim() === '') {
+                    validThreshold = true;
+                } else {
+                    const parsed = parseInt(thresholdInput, 10);
+                    if (!isNaN(parsed) && parsed >= 1 && parsed <= 100) {
+                        threshold = parsed;
+                        validThreshold = true;
+                    } else {
+                        console.log(chalk.red('❌ 无效输入。请输入 1-100 整数。'));
+                    }
+                }
+            }
+
+            renderHeader('主界面 > 自动居中 (2/3) - 填充背景');
+            console.log(chalk.cyan('🎨 【背景色】当内容偏离中心时，系统将在对向补齐背景色。'));
+            const fillChoices: Choice<string | 'back'>[] = [
+                {
+                    key: '1',
+                    title: '全透明 (Transparent)',
+                    description: '推荐用于 WebP/PNG 表情包',
+                    value: 'transparent',
+                    titleColor: chalk.green
+                },
+                {
+                    key: '2',
+                    title: '纯白色 (#FFFFFF)',
+                    description: '推荐用于 JPG 修复',
+                    value: '#FFFFFF',
+                    titleColor: chalk.white
+                },
+                {
+                    key: '3',
+                    title: '自定义 Hex 色值',
+                    description: '手动输入如 #FAFAFA',
+                    value: 'custom',
+                    titleColor: chalk.blue
+                },
+                { key: '0', title: '上一步', description: '', value: 'back', titleColor: chalk.gray }
+            ];
+
+            let fillColor = await customSelect(`${chalk.yellow.bold('📦 请选择补白颜色')}:`, fillChoices);
+            if (fillColor === 'back') continue;
+            if (fillColor === 'custom') {
+                fillColor = (await askQuestion(chalk.gray('  ? 请输入十六进制色值码(如 #FF0000): '))) || 'transparent';
+            }
+
+            renderHeader('主界面 > 自动居中 (3/3) - 最终输出格式');
+            const formatChoicesCenter: Choice<'original' | 'webp' | 'png' | 'mozjpeg' | 'back'>[] = [
+                {
+                    key: '1',
+                    title: '保持原格式',
+                    description: '不改变图片封装',
+                    value: 'original',
+                    titleColor: chalk.green
+                },
+                {
+                    key: '2',
+                    title: '导出为 WebP',
+                    description: '高压缩率，支持透明 (推荐)',
+                    value: 'webp',
+                    titleColor: chalk.cyan
+                },
+                {
+                    key: '3',
+                    title: '导出为 PNG',
+                    description: '无损画质，支持透明',
+                    value: 'png',
+                    titleColor: chalk.blue
+                },
+                {
+                    key: '4',
+                    title: '导出为 MozJPEG',
+                    description: '网页兼容性极佳',
+                    value: 'mozjpeg',
+                    titleColor: chalk.red
+                },
+                { key: '0', title: '上一步', description: '', value: 'back', titleColor: chalk.gray }
+            ];
+            const finalFormatChoice = await customSelect(
+                `${chalk.yellow.bold('📦 请选择最终导出格式')}:`,
+                formatChoicesCenter
+            );
+            if (finalFormatChoice === 'back') continue;
+
+            const centerConfig: CenterConfig = {
+                threshold,
+                fillColor: fillColor as string,
+                outputFormat:
+                    finalFormatChoice === 'original' ? undefined : (finalFormatChoice as 'webp' | 'png' | 'mozjpeg')
+            };
+
+            return { format: 'center', centerConfig };
         }
 
         console.clear();

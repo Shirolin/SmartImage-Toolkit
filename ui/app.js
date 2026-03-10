@@ -21,6 +21,20 @@ const divideRowsInput = document.getElementById('divideRows');
 const divideColsInput = document.getElementById('divideCols');
 const applyDivideBtn = document.getElementById('applyDivideBtn');
 const snapToggle = document.getElementById('snapToggle'); // 吸附开关
+const smartCenterToggle = document.getElementById('smartCenterToggle'); // 智能居中开关
+const centerConfigDetails = document.getElementById('centerConfigDetails');
+const centerThreshold = document.getElementById('centerThreshold');
+const thresholdVal = document.getElementById('thresholdVal');
+const centerFillColor = document.getElementById('centerFillColor');
+const centerFormat = document.getElementById('centerFormat');
+
+smartCenterToggle.addEventListener('change', (e) => {
+    centerConfigDetails.classList.toggle('hidden', !e.target.checked);
+});
+
+centerThreshold.addEventListener('input', (e) => {
+    thresholdVal.textContent = e.target.value;
+});
 
 // 放大镜
 const magnifier = document.getElementById('magnifier');
@@ -180,6 +194,7 @@ loadBtn.addEventListener('click', async () => {
 
         if (data.success && data.path) {
             imgPathInput.value = data.path;
+            imgPathInput.classList.remove('path-warning'); // 消除警告
             const absolutePath = data.path.trim();
             if (absolutePath) loadImage(absolutePath);
         }
@@ -592,7 +607,14 @@ splitBtn.addEventListener('click', async () => {
             body: JSON.stringify({
                 filePath: imgPathInput.value.trim(),
                 cutX: lines.x,
-                cutY: lines.y
+                cutY: lines.y,
+                smartCenter: smartCenterToggle.checked,
+                centerConfig: smartCenterToggle.checked ? {
+                    threshold: parseInt(centerThreshold.value),
+                    fillColor: centerFillColor.value,
+                    outputFormat: centerFormat.value,
+                    sides: Array.from(document.querySelectorAll('.center-side:checked')).map(cb => cb.value)
+                } : null
             })
         });
         const data = await res.json();
@@ -658,7 +680,9 @@ window.addEventListener('drop', (e) => {
     const file = e.dataTransfer.files[0];
     if (file && file.type.startsWith('image/')) {
         // 同步路径输入框显示文件名（通过拖拽载入的）
+        // 警告：浏览器 drag & drop 只给文件名，不给绝对路径
         imgPathInput.value = file.name;
+        imgPathInput.classList.add('path-warning'); // 视觉警告
 
         const reader = new FileReader();
         reader.onload = (event) => {
@@ -674,7 +698,7 @@ window.addEventListener('drop', (e) => {
                 splitBtn.disabled = false;
                 resetView();
                 draw();
-                showStatus('通过拖拽成功载入预览图！', 'success');
+                showStatus('⚠️ 已载入预览。请注意：由于浏览器限制，切图处理需要“完整路径”。请使用【选择图片】按钮重新选定，或手动补全输入框中的路径。', 'error');
             };
             img.src = event.target.result;
         };
