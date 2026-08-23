@@ -2,7 +2,7 @@
 :: 接收所有拖拽或“发送到”进来的参数（多张图片）
 setlocal enabledelayedexpansion
 
-cd /d "c:\Users\shiro\Tools\SmartImage-Toolkit"
+cd /d "%~dp0"
 
 :: 如果没有参数，直接启动打开一个空界面
 if "%~1"=="" (
