@@ -6,7 +6,7 @@ const libServerPath = path.join(__dirname, 'lib', 'server.js');
 const srcServerPath = path.join(__dirname, 'src', 'server.ts');
 
 // 如果路径中含有空格，需要用双引号包裹以防由于 shell: true 被截断
-const args = process.argv.slice(2).map(arg => arg.includes(' ') ? `"${arg}"` : arg);
+const args = process.argv.slice(2).map((arg) => (arg.includes(' ') ? `"${arg}"` : arg));
 
 let cmd, scriptArgs;
 
@@ -27,4 +27,4 @@ const child = spawn(cmd, scriptArgs, {
     shell: true
 });
 
-child.on('exit', code => process.exit(code));
+child.on('exit', (code) => process.exit(code));
