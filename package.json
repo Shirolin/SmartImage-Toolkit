@@ -1,6 +1,9 @@
 {
     "name": "smart-image-toolkit",
     "version": "1.0.0",
+    "engines": {
+        "node": ">=20"
+    },
     "scripts": {
         "start": "node lib/convert.js",
         "ui": "node bootstrap.js",
