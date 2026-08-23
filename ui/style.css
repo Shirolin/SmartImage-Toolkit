@@ -50,7 +50,11 @@
 body {
     background-color: var(--bg-main);
     color: var(--text-main);
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-family:
+        'Inter',
+        system-ui,
+        -apple-system,
+        sans-serif;
     height: 100vh;
     overflow: hidden;
     line-height: 1.5;
@@ -193,7 +197,6 @@ body {
     box-shadow: var(--shadow-glow);
 }
 
-
 /* --- 卡片通用样式 --- */
 .instruction-card {
     background: rgba(255, 255, 255, 0.02);
@@ -315,7 +318,7 @@ body {
     letter-spacing: 0.1em;
 }
 
-.divide-field input[type="number"] {
+.divide-field input[type='number'] {
     width: 100%;
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--border-color);
@@ -329,7 +332,7 @@ body {
     transition: var(--transition-base);
 }
 
-.divide-field input[type="number"]:focus {
+.divide-field input[type='number']:focus {
     border-color: var(--primary-color);
     background: rgba(255, 255, 255, 0.06);
 }
@@ -342,9 +345,6 @@ body {
 
 #applyDivideBtn {
     margin-top: 18px;
-}
-
-box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
 }
 
 .divide-x {
@@ -563,7 +563,7 @@ button {
 
 /* --- 拖拽加载视觉反馈 --- */
 body.drag-active::after {
-    content: "松开鼠标即可载入图片";
+    content: '松开鼠标即可载入图片';
     position: fixed;
     top: 0;
     left: 0;
@@ -600,7 +600,9 @@ body.drag-active::after {
 
 .magnifier-canvas.snapped {
     border-color: #facc15;
-    box-shadow: 0 0 12px rgba(250, 204, 21, 0.3), 0 10px 30px rgba(0, 0, 0, 0.6);
+    box-shadow:
+        0 0 12px rgba(250, 204, 21, 0.3),
+        0 10px 30px rgba(0, 0, 0, 0.6);
 }
 
 .path-input.path-warning {
@@ -641,7 +643,7 @@ body.drag-active::after {
 }
 
 .switch-slider::before {
-    content: "";
+    content: '';
     position: absolute;
     width: 10px;
     height: 10px;
@@ -652,12 +654,12 @@ body.drag-active::after {
     transition: var(--transition-base);
 }
 
-.switch-container input:checked+.switch-slider {
+.switch-container input:checked + .switch-slider {
     background: var(--primary-color);
     border-color: var(--primary-color);
 }
 
-.switch-container input:checked+.switch-slider::before {
+.switch-container input:checked + .switch-slider::before {
     transform: translateX(12px);
     background: white;
 }
@@ -718,7 +720,7 @@ body.drag-active::after {
     gap: 12px;
 }
 
-input[type="range"] {
+input[type='range'] {
     flex: 1;
     height: 4px;
     background: rgba(255, 255, 255, 0.1);
@@ -727,7 +729,7 @@ input[type="range"] {
     cursor: pointer;
 }
 
-input[type="range"]::-webkit-slider-thumb {
+input[type='range']::-webkit-slider-thumb {
     appearance: none;
     width: 14px;
     height: 14px;
@@ -779,13 +781,12 @@ select:focus {
     font-weight: 500 !important;
 }
 
-.sides-selector input[type="checkbox"] {
+.sides-selector input[type='checkbox'] {
     width: 14px;
     height: 14px;
     accent-color: var(--primary-color);
     cursor: pointer;
 }
-
 
 /* --- 底部选项区 --- */
 .footer-options {
@@ -800,7 +801,6 @@ select:focus {
     font-size: 13px;
     color: var(--text-main);
 }
-
 
 /* --- 颜色选择器样式 --- */
 .color-picker-group {

@@ -67,7 +67,7 @@ let snapIndicator = null; // { axis: 'x'|'y', value: number } 当前吸附的参
 
 const lines = {
     x: [], // vertical lines (X coords)
-    y: []  // horizontal lines (Y coords)
+    y: [] // horizontal lines (Y coords)
 };
 
 let draggingLine = null; // { axis: 'x'|'y', index: number }
@@ -111,11 +111,11 @@ function applyEqualDivide(rows, cols) {
 
     // 生成竖向等分线
     for (let i = 1; i < cols; i++) {
-        lines.x.push(Math.round(imgWidth * i / cols));
+        lines.x.push(Math.round((imgWidth * i) / cols));
     }
     // 生成横向等分线
     for (let i = 1; i < rows; i++) {
-        lines.y.push(Math.round(imgHeight * i / rows));
+        lines.y.push(Math.round((imgHeight * i) / rows));
     }
 
     lines.x.sort((a, b) => a - b);
@@ -198,7 +198,7 @@ loadBtn.addEventListener('click', async () => {
             const absolutePath = data.path.trim();
             if (absolutePath) loadImage(absolutePath);
         }
-    } catch (e) {
+    } catch {
         const p = imgPathInput.value.trim();
         if (p) loadImage(p);
     } finally {
@@ -209,7 +209,7 @@ loadBtn.addEventListener('click', async () => {
 
 function loadImage(path) {
     const img = new Image();
-    img.crossOrigin = "anonymous";
+    img.crossOrigin = 'anonymous';
     img.onload = () => {
         currentImage = img;
         imgWidth = img.width;
@@ -252,8 +252,7 @@ function resetView() {
     updateTransform();
 }
 
-function zoom(delta, centerX, centerY) {
-    const oldScale = scale;
+function zoom(delta) {
     const zoomStep = 1.1;
     if (delta > 0) scale *= zoomStep;
     else scale /= zoomStep;
@@ -313,11 +312,7 @@ function renderMagnifier(mouseEvent, snapValue, axis) {
     // 清除并绘制放大图像
     magCtx.clearRect(0, 0, MAG_SIZE, MAG_SIZE);
     magCtx.imageSmoothingEnabled = false; // 像素级清晰
-    magCtx.drawImage(
-        currentImage,
-        sx, sy, srcSize, srcSize,
-        0, 0, MAG_SIZE, MAG_SIZE
-    );
+    magCtx.drawImage(currentImage, sx, sy, srcSize, srcSize, 0, 0, MAG_SIZE, MAG_SIZE);
 
     // 绘制十字准线
     const center = MAG_SIZE / 2;
@@ -459,14 +454,22 @@ window.addEventListener('mousemove', (e) => {
         const snapT = HIT_TOLERANCE / scale;
         let hovered = false;
         for (let i = 1; i < lines.x.length - 1; i++) {
-            if (Math.abs(pos.x - lines.x[i]) <= snapT) { hovered = true; canvas.style.cursor = 'col-resize'; break; }
+            if (Math.abs(pos.x - lines.x[i]) <= snapT) {
+                hovered = true;
+                canvas.style.cursor = 'col-resize';
+                break;
+            }
         }
         for (let i = 1; i < lines.y.length - 1 && !hovered; i++) {
-            if (Math.abs(pos.y - lines.y[i]) <= snapT) { hovered = true; canvas.style.cursor = 'row-resize'; break; }
+            if (Math.abs(pos.y - lines.y[i]) <= snapT) {
+                hovered = true;
+                canvas.style.cursor = 'row-resize';
+                break;
+            }
         }
 
         if (!hovered) {
-            canvas.style.cursor = (currentMode === 'p' || isSpacePressed) ? 'grab' : 'crosshair';
+            canvas.style.cursor = currentMode === 'p' || isSpacePressed ? 'grab' : 'crosshair';
         }
     }
 });
@@ -477,23 +480,23 @@ window.addEventListener('mouseup', () => {
     snapIndicator = null;
     magnifier.style.display = 'none';
     magnifier.classList.remove('snapped');
-    if (canvas) canvas.style.cursor = (currentMode === 'p' || isSpacePressed) ? 'grab' : 'crosshair';
+    if (canvas) canvas.style.cursor = currentMode === 'p' || isSpacePressed ? 'grab' : 'crosshair';
     draw();
 });
 
 // 辅助线配色交互
-document.querySelectorAll('#colorOptionsX .color-swatch').forEach(swatch => {
+document.querySelectorAll('#colorOptionsX .color-swatch').forEach((swatch) => {
     swatch.addEventListener('click', () => {
-        document.querySelectorAll('#colorOptionsX .color-swatch').forEach(s => s.classList.remove('active'));
+        document.querySelectorAll('#colorOptionsX .color-swatch').forEach((s) => s.classList.remove('active'));
         swatch.classList.add('active');
         guideColorX = swatch.dataset.color;
         draw();
     });
 });
 
-document.querySelectorAll('#colorOptionsY .color-swatch').forEach(swatch => {
+document.querySelectorAll('#colorOptionsY .color-swatch').forEach((swatch) => {
     swatch.addEventListener('click', () => {
-        document.querySelectorAll('#colorOptionsY .color-swatch').forEach(s => s.classList.remove('active'));
+        document.querySelectorAll('#colorOptionsY .color-swatch').forEach((s) => s.classList.remove('active'));
         swatch.classList.add('active');
         guideColorY = swatch.dataset.color;
         draw();
@@ -501,12 +504,16 @@ document.querySelectorAll('#colorOptionsY .color-swatch').forEach(swatch => {
 });
 
 // 滚轮缩放
-window.addEventListener('wheel', (e) => {
-    if (e.target.closest('.main-content')) {
-        e.preventDefault();
-        zoom(e.deltaY < 0 ? 1 : -1);
-    }
-}, { passive: false });
+window.addEventListener(
+    'wheel',
+    (e) => {
+        if (e.target.closest('.main-content')) {
+            e.preventDefault();
+            zoom(e.deltaY < 0 ? 1 : -1);
+        }
+    },
+    { passive: false }
+);
 
 canvas.addEventListener('dblclick', (e) => {
     if (!currentImage) return;
@@ -609,12 +616,14 @@ splitBtn.addEventListener('click', async () => {
                 cutX: lines.x,
                 cutY: lines.y,
                 smartCenter: smartCenterToggle.checked,
-                centerConfig: smartCenterToggle.checked ? {
-                    threshold: parseInt(centerThreshold.value),
-                    fillColor: centerFillColor.value,
-                    outputFormat: centerFormat.value,
-                    sides: Array.from(document.querySelectorAll('.center-side:checked')).map(cb => cb.value)
-                } : null
+                centerConfig: smartCenterToggle.checked
+                    ? {
+                          threshold: parseInt(centerThreshold.value),
+                          fillColor: centerFillColor.value,
+                          outputFormat: centerFormat.value,
+                          sides: Array.from(document.querySelectorAll('.center-side:checked')).map((cb) => cb.value)
+                      }
+                    : null
             })
         });
         const data = await res.json();
@@ -636,7 +645,7 @@ exitBtn.addEventListener('click', async () => {
         await fetch('/api/exit', { method: 'POST' });
         showStatus('服务已关闭，您可以安全关闭此窗口。', 'success');
         window.close();
-    } catch (e) {
+    } catch {
         showStatus('无法联系服务，可能已经关闭。', 'error');
     }
 });
@@ -698,7 +707,10 @@ window.addEventListener('drop', (e) => {
                 splitBtn.disabled = false;
                 resetView();
                 draw();
-                showStatus('⚠️ 已载入预览。请注意：由于浏览器限制，切图处理需要“完整路径”。请使用【选择图片】按钮重新选定，或手动补全输入框中的路径。', 'error');
+                showStatus(
+                    '⚠️ 已载入预览。请注意：由于浏览器限制，切图处理需要“完整路径”。请使用【选择图片】按钮重新选定，或手动补全输入框中的路径。',
+                    'error'
+                );
             };
             img.src = event.target.result;
         };
@@ -710,6 +722,5 @@ init();
 
 // 每 1 分钟发送一次心跳，证明页面仍在开启状态，防止服务端因闲置超时而自动关闭
 setInterval(() => {
-    fetch('/api/heartbeat').catch(() => { });
+    fetch('/api/heartbeat').catch(() => {});
 }, 60000);
-
