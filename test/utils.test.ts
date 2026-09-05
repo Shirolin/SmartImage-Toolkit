@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { SUPPORTED_EXTS, getFiles } from '../src/utils';
+import { SUPPORTED_EXTS, getFiles, type FilesWarning } from '../src/utils';
 import { makeTempDir, createPng } from './helpers';
 
 describe('SUPPORTED_EXTS', () => {
@@ -59,5 +59,28 @@ describe('getFiles', () => {
         await createPng(deepFile, 8, 8);
         // maxDepth=0 时子层级(深度1)超限，应返回空
         expect(await getFiles(dir, 0)).toEqual([]);
+    });
+});
+
+describe('getFiles depth 语义（与旧版逐层递归对齐）', () => {
+    it('maxDepth=1 时二级目录文件被跳过，根文件保留', async () => {
+        const dir = makeTempDir();
+        const sub = path.join(dir, 'sub');
+        fs.mkdirSync(sub);
+        const rootFile = path.join(dir, 'root.png');
+        await createPng(rootFile, 8, 8);
+        await createPng(path.join(sub, 'deep.png'), 8, 8);
+        // 旧版：root.png 走 getFiles(·,1,1)保留；deep.png 走 getFiles(·,1,2)超深跳过
+        expect(await getFiles(dir, 1)).toEqual([rootFile]);
+    });
+
+    it('超深跳过经 onWarn 上报 depth', async () => {
+        const dir = makeTempDir();
+        const sub = path.join(dir, 'sub');
+        fs.mkdirSync(sub);
+        await createPng(path.join(sub, 'deep.png'), 8, 8);
+        const warns: FilesWarning[] = [];
+        expect(await getFiles(dir, 1, 0, (w) => warns.push(w))).toEqual([]);
+        expect(warns.some((w) => w.kind === 'depth')).toBe(true);
     });
 });

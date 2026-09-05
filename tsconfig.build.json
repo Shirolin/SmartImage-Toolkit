@@ -1,0 +1,8 @@
+{
+    // 编译专用：只含 src 并锁定 rootDir，保证 lib/ 下扁平产物布局（dist 脚本依赖 lib/*.js）
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "rootDir": "./src"
+    },
+    "include": ["src/**/*"]
+}

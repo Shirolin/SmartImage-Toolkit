@@ -1,6 +1,14 @@
 import sharp from 'sharp';
-import fs from 'fs';
 import path from 'path';
+import { writeFile } from 'fs/promises';
+
+import type { SplitResult } from './shared/results';
+import { allocateDir } from './shared/output-naming';
+import { applyEncoding } from './shared/encode';
+import { SPLIT_TRIM_THRESHOLD } from './shared/constants';
+
+// 兼容旧名：统一复用共享结果类型
+export type { SplitResult };
 
 export interface SplitOptions {
     rows: number;
@@ -12,11 +20,9 @@ export interface SplitOptions {
     debugGrid?: boolean;
 }
 
-export interface SplitResult {
-    status: 'success' | 'error' | 'skipped';
-    file: string;
-    reason?: string;
-    generatedFiles: string[];
+// SVG 属性转义：防特殊字符破坏 debug 覆盖层
+function escapeXml(value: string | number): string {
+    return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 /**
@@ -31,11 +37,14 @@ export async function splitImage(
     const ext = path.extname(filePath);
     const name = path.basename(filePath, ext);
     const generatedFiles: string[] = [];
+    // 非切片产物（排查标尺图、split_config.json）：不计入 success 计数与后处理
+    const artifacts: string[] = [];
 
     try {
-        const metadata = await sharp(filePath).metadata();
-        const width = metadata.width || 0;
-        const height = metadata.height || 0;
+        // 源图只读一次：解码得 buffer 并复用 info 尺寸，后续切片全走内存 buffer
+        const { data: srcBuffer, info: srcInfo } = await sharp(filePath).toBuffer({ resolveWithObject: true });
+        const width = srcInfo.width || 0;
+        const height = srcInfo.height || 0;
 
         if (!width || !height) {
             throw new Error('无法读取图像尺寸');
@@ -49,20 +58,18 @@ export async function splitImage(
         const offsetLeft = 0;
         const offsetTop = 0;
 
-        let outDir = path.join(dir, name);
-        let dirCounter = 1;
-        while (fs.existsSync(outDir)) {
-            outDir = path.join(dir, `${name}(${dirCounter})`);
-            dirCounter++;
-        }
-        fs.mkdirSync(outDir, { recursive: true });
+        // 输出目录按 name(1) 递增独占分配，杜绝并发命名竞争
+        const outDir = await allocateDir(path.join(dir, name));
 
-        const promises: Promise<void>[] = [];
+        // 单片失败记账：只记不断整批
+        const failedTiles: Array<{ row: number; col: number; reason: string }> = [];
+        // trim 回退备注（单片 trim 失败后仍用原碎片跑通，仅留痕排查）
+        const trimFallbacks: Array<{ row: number; col: number; reason: string }> = [];
 
         let svgLines = '';
         if (options.debugGrid) {
-            svgLines = `<svg width="${width}" height="${height}">
-                <rect x="${offsetLeft}" y="${offsetTop}" width="${contentWidth}" height="${contentHeight}" fill="none" stroke="red" stroke-width="4"/>`;
+            svgLines = `<svg width="${escapeXml(width)}" height="${escapeXml(height)}">
+                <rect x="${escapeXml(offsetLeft)}" y="${escapeXml(offsetTop)}" width="${escapeXml(contentWidth)}" height="${escapeXml(contentHeight)}" fill="none" stroke="red" stroke-width="4"/>`;
         }
 
         const useCustomCuts =
@@ -72,6 +79,18 @@ export async function splitImage(
             options.cutY.length >= 2;
         const totalRows = useCustomCuts ? options.cutY!.length - 1 : options.rows;
         const totalCols = useCustomCuts ? options.cutX!.length - 1 : options.cols;
+        // 分片失败携带坐标的错误类型（供 allSettled 后归因记账）
+        class TileError extends Error {
+            constructor(
+                readonly row: number,
+                readonly col: number,
+                reason: string
+            ) {
+                super(reason);
+            }
+        }
+
+        const tileJobs: Array<Promise<string>> = [];
 
         for (let row = 0; row < totalRows; row++) {
             for (let col = 0; col < totalCols; col++) {
@@ -96,13 +115,18 @@ export async function splitImage(
                 const tileWidth = innerRight - innerLeft;
                 const tileHeight = innerBottom - innerTop;
 
-                // 容错: 确保不越出原图物理边界
+                // 容错：越界或零尺寸格子记账跳过，不中断整批
                 if (left + tileWidth > width || top + tileHeight > height || tileWidth <= 0 || tileHeight <= 0) {
+                    failedTiles.push({
+                        row,
+                        col,
+                        reason: `切片越界或尺寸非法(left=${left},top=${top},width=${tileWidth},height=${tileHeight})`
+                    });
                     continue;
                 }
 
                 if (options.debugGrid) {
-                    svgLines += `<rect x="${left}" y="${top}" width="${tileWidth}" height="${tileHeight}" fill="none" stroke="blue" stroke-width="2"/>`;
+                    svgLines += `<rect x="${escapeXml(left)}" y="${escapeXml(top)}" width="${escapeXml(tileWidth)}" height="${escapeXml(tileHeight)}" fill="none" stroke="blue" stroke-width="2"/>`;
                 }
 
                 // 命名格式：原图名_行_列
@@ -112,139 +136,170 @@ export async function splitImage(
 
                 const outputPath = path.join(outDir, `${name}${suffix}${formatExt}`);
 
-                // 首先提取出原本的切片块 (作为原始碎片 Buffer)
-                const tileBuffer = await sharp(filePath)
-                    .extract({ left, top, width: tileWidth, height: tileHeight })
-                    .toBuffer();
-
-                let pipeline = sharp(tileBuffer);
-
-                // 智能居中逻辑
-                if (options.centerMode && options.centerMode !== 'none') {
+                // 单片任务：构建→落盘；失败抛 TileError（携带坐标供 allSettled 归因）
+                const tileJob: Promise<string> = (async () => {
                     try {
-                        // 0. 边缘杂边消除 (Edge Shaving)
-                        // 若原图含有不易察觉的切分线网格 (如极淡的灰色1px线条)，会阻碍 trim 的寻路
-                        // 依据用户选择，安全向内剃去指定的边缘像素厚度
-                        const shave = options.edgeShave || 0;
-                        const shavedBuffer =
-                            shave > 0 && tileWidth > shave * 2 && tileHeight > shave * 2
-                                ? await sharp(tileBuffer)
-                                      .extract({
-                                          left: shave,
-                                          top: shave,
-                                          width: tileWidth - shave * 2,
-                                          height: tileHeight - shave * 2
-                                      })
-                                      .toBuffer()
-                                : tileBuffer;
-
-                        // --- 修正采样逻辑：从“剃肉”后的干净 Buffer 中提取背景色 ---
-                        const { data, info } = await sharp(shavedBuffer)
-                            .extract({ left: 0, top: 0, width: 1, height: 1 })
-                            .raw()
-                            .toBuffer({ resolveWithObject: true });
-
-                        const r = data[0];
-                        const g = data[1];
-                        const b = data[2];
-                        const alpha = info.channels === 4 ? data[3] : 255;
-
-                        // 1. 修剪空白边缘 (此步骤丢弃所有纯白或透明的边缘填充)
-                        // threshold=40 容差可以吃掉很多肉眼看不见但阻碍算作空白的 WebP/JPEG 压缩噪波点 (如 #Fdfdfd)
-                        const trimmedBuffer = await sharp(shavedBuffer)
-                            .trim({
-                                background: { r, g, b, alpha },
-                                threshold: 40
-                            })
+                        // 从内存源 buffer 切片，不再重复读源文件
+                        const tileBuffer = await sharp(srcBuffer)
+                            .extract({ left, top, width: tileWidth, height: tileHeight })
                             .toBuffer();
 
-                        const trimMeta = await sharp(trimmedBuffer).metadata();
-                        const coreWidth = trimMeta.width || tileWidth;
-                        const coreHeight = trimMeta.height || tileHeight;
+                        let pipeline = sharp(tileBuffer);
 
-                        // 2. 根据用户要求的最终长宽重新扩展画布
-                        let finalCanvasWidth = tileWidth;
-                        let finalCanvasHeight = tileHeight;
+                        // 智能居中逻辑
+                        if (options.centerMode && options.centerMode !== 'none') {
+                            try {
+                                // 0. 边缘杂边消除 (Edge Shaving)
+                                // 若原图含有不易察觉的切分线网格 (如极淡的灰色1px线条)，会阻碍 trim 的寻路
+                                // 依据用户选择，安全向内剃去指定的边缘像素厚度
+                                const shave = options.edgeShave || 0;
+                                const shavedBuffer =
+                                    shave > 0 && tileWidth > shave * 2 && tileHeight > shave * 2
+                                        ? await sharp(tileBuffer)
+                                              .extract({
+                                                  left: shave,
+                                                  top: shave,
+                                                  width: tileWidth - shave * 2,
+                                                  height: tileHeight - shave * 2
+                                              })
+                                              .toBuffer()
+                                        : tileBuffer;
 
-                        if (options.centerMode === 'square') {
-                            const maxSize = Math.max(tileWidth, tileHeight);
-                            finalCanvasWidth = maxSize;
-                            finalCanvasHeight = maxSize;
+                                // --- 修正采样逻辑：从“剃肉”后的干净 Buffer 中提取背景色 ---
+                                const { data, info } = await sharp(shavedBuffer)
+                                    .extract({ left: 0, top: 0, width: 1, height: 1 })
+                                    .raw()
+                                    .toBuffer({ resolveWithObject: true });
+
+                                const r = data[0];
+                                const g = data[1];
+                                const b = data[2];
+                                const alpha = info.channels === 4 ? data[3] : 255;
+
+                                // 1. 修剪空白边缘 (此步骤丢弃所有纯白或透明的边缘填充)
+                                // SPLIT_TRIM_THRESHOLD 容差吃掉肉眼看不见但阻碍判空的 WebP/JPEG 压缩噪波点 (如 #Fdfdfd)
+                                const trimmedBuffer = await sharp(shavedBuffer)
+                                    .trim({
+                                        background: { r, g, b, alpha },
+                                        threshold: SPLIT_TRIM_THRESHOLD
+                                    })
+                                    .toBuffer();
+
+                                const trimMeta = await sharp(trimmedBuffer).metadata();
+                                const coreWidth = trimMeta.width || tileWidth;
+                                const coreHeight = trimMeta.height || tileHeight;
+
+                                // 2. 根据用户要求的最终长宽重新扩展画布
+                                let finalCanvasWidth = tileWidth;
+                                let finalCanvasHeight = tileHeight;
+
+                                if (options.centerMode === 'square') {
+                                    const maxSize = Math.max(tileWidth, tileHeight);
+                                    finalCanvasWidth = maxSize;
+                                    finalCanvasHeight = maxSize;
+                                }
+
+                                // 3. 计算在目标大画布中的安全留白并拓展
+                                const extendLeft = Math.floor((finalCanvasWidth - coreWidth) / 2);
+                                const extendRight = finalCanvasWidth - coreWidth - extendLeft;
+                                const extendTop = Math.floor((finalCanvasHeight - coreHeight) / 2);
+                                const extendBottom = finalCanvasHeight - coreHeight - extendTop;
+
+                                pipeline = sharp(trimmedBuffer).extend({
+                                    top: extendTop,
+                                    bottom: extendBottom,
+                                    left: extendLeft,
+                                    right: extendRight,
+                                    background: { r, g, b, alpha }
+                                });
+                            } catch (trimErr: unknown) {
+                                // trim 失败记因留痕，回退原始碎片继续跑，保证单片不断
+                                const trimReason = trimErr instanceof Error ? trimErr.message : String(trimErr);
+                                trimFallbacks.push({ row, col, reason: trimReason });
+                                pipeline = sharp(tileBuffer);
+                            }
                         }
 
-                        // 3. 计算在目标大画布中的安全留白并拓展
-                        const extendLeft = Math.floor((finalCanvasWidth - coreWidth) / 2);
-                        const extendRight = finalCanvasWidth - coreWidth - extendLeft;
-                        const extendTop = Math.floor((finalCanvasHeight - coreHeight) / 2);
-                        const extendBottom = finalCanvasHeight - coreHeight - extendTop;
+                        // 统一编码（webp/png/jpg 参数收敛到共享 applyEncoding）
+                        pipeline = applyEncoding(pipeline, formatExt);
 
-                        pipeline = sharp(trimmedBuffer).extend({
-                            top: extendTop,
-                            bottom: extendBottom,
-                            left: extendLeft,
-                            right: extendRight,
-                            background: { r, g, b, alpha }
-                        });
-                    } catch {
-                        // 如果 trim 失败，抛弃 trim 继续使用原始 buffer
-                        pipeline = sharp(tileBuffer);
-                    }
-                }
-
-                if (formatExt === '.webp') {
-                    pipeline = pipeline.webp({ quality: 90, effort: 6 });
-                } else if (formatExt === '.png') {
-                    pipeline = pipeline.png({ quality: 80, effort: 8 });
-                } else if (formatExt === '.jpg') {
-                    pipeline = pipeline.jpeg({ quality: 90 });
-                }
-
-                generatedFiles.push(outputPath);
-
-                const savePromise = pipeline
-                    .toFile(outputPath)
-                    .then(() => {})
-                    .catch((err) => {
+                        await pipeline.toFile(outputPath);
+                        return outputPath;
+                    } catch (err: unknown) {
                         const errMsg = err instanceof Error ? err.message : String(err);
-                        throw new Error(`保存切片 ${suffix} 失败: ${errMsg}`);
-                    });
+                        throw new TileError(row, col, `保存切片 ${suffix} 失败: ${errMsg}`);
+                    }
+                })();
 
-                promises.push(savePromise);
+                tileJobs.push(tileJob);
             }
         }
 
-        await Promise.all(promises);
-
-        // 如果开启了辅佐标尺模式，生成带有标尺线的全图副本
-        if (options.debugGrid) {
-            svgLines += `</svg>`;
-            const debugFilePath = path.join(outDir, `${name}_debug_grid${formatExt}`);
-            await sharp(filePath)
-                .composite([{ input: Buffer.from(svgLines), top: 0, left: 0 }])
-                .toFile(debugFilePath);
-            generatedFiles.push(debugFilePath);
+        // 先落盘后记账：toFile 成功才 push，失败记 failedTiles 继续跑
+        const settlements = await Promise.allSettled(tileJobs);
+        for (const settlement of settlements) {
+            if (settlement.status === 'fulfilled') {
+                generatedFiles.push(settlement.value);
+            } else {
+                const tileErr = settlement.reason as TileError;
+                failedTiles.push({ row: tileErr.row, col: tileErr.col, reason: tileErr.message });
+            }
         }
 
-        // 保存用户切割配置
+        // 整批全失败才 error（成功数为零且确实有分片任务）；部分失败仍 success 但带失败分项
+        if (totalRows * totalCols > 0 && generatedFiles.length === 0) {
+            const summary = failedTiles.map((t) => `r${t.row + 1}c${t.col + 1}:${t.reason}`).join('；');
+            return {
+                status: 'error',
+                file: filePath,
+                reason: `全部分片失败(${failedTiles.length}片): ${summary}`,
+                generatedFiles: [],
+                artifacts,
+                failedTiles
+            };
+        }
+
+        // 排查标尺图 best-effort：失败不影响切片结果；记 artifacts 不计 success
+        if (options.debugGrid) {
+            try {
+                svgLines += `</svg>`;
+                const debugFilePath = path.join(outDir, `${name}_debug_grid${formatExt}`);
+                await sharp(srcBuffer)
+                    .composite([{ input: Buffer.from(svgLines), top: 0, left: 0 }])
+                    .toFile(debugFilePath);
+                artifacts.push(debugFilePath);
+            } catch (debugErr: unknown) {
+                // 排查图生成失败仅跳过，整批结果不受影响；留痕供排查
+                console.warn(
+                    `[split] 排查标尺图生成失败，已跳过: ${debugErr instanceof Error ? debugErr.message : String(debugErr)}`
+                );
+            }
+        }
+
+        // 保存用户切割配置（含失败记账，供排查）
         const configPath = path.join(outDir, 'split_config.json');
-        fs.writeFileSync(
+        await writeFile(
             configPath,
             JSON.stringify(
                 {
                     source: filePath,
-                    options: options
+                    options: options,
+                    failedTiles,
+                    trimFallbacks
                 },
                 null,
                 2
             ),
             'utf-8'
         );
-        generatedFiles.push(configPath);
+        artifacts.push(configPath);
 
         return {
             status: 'success',
             file: filePath,
-            generatedFiles
+            generatedFiles,
+            artifacts,
+            ...(failedTiles.length > 0 ? { failedTiles } : {})
         };
     } catch (error: unknown) {
         let errorDetails = '';
@@ -255,7 +310,8 @@ export async function splitImage(
             status: 'error',
             file: filePath,
             reason: `图片切割异常: ${errorDetails}`,
-            generatedFiles: []
+            generatedFiles: [],
+            artifacts: []
         };
     }
 }

@@ -1,14 +1,15 @@
 import sharp from 'sharp';
-import fs from 'fs';
 import path from 'path';
+import { promises as fsp } from 'fs';
 
 import { CenterConfig } from './cli';
+import type { OpResult } from './shared/results';
+import { ensureDir, allocateFilePath } from './shared/output-naming';
+import { applyEncoding } from './shared/encode';
+import { normalizeExt } from './shared/formats';
 
-export interface CenterResult {
-    status: 'success' | 'error' | 'skipped';
-    file: string;
-    reason?: string;
-}
+// 兼容旧名：统一复用共享操作结果类型
+export type CenterResult = OpResult;
 
 export async function processCenter(
     filePath: string,
@@ -19,19 +20,13 @@ export async function processCenter(
     const ext = path.extname(filePath);
     const name = path.basename(filePath, ext);
 
-    const actualExt = formatExt || ext.toLowerCase();
+    // 输出扩展名归一化（小写；.jpeg→.jpg），未知格式原样透传
+    const actualExt = normalizeExt(formatExt || ext);
     const outDir = path.join(dir, 'centered');
+    await ensureDir(outDir);
 
-    if (!fs.existsSync(outDir)) {
-        fs.mkdirSync(outDir, { recursive: true });
-    }
-
-    let outputPath = path.join(outDir, `${name}${actualExt}`);
-    let counter = 1;
-    while (fs.existsSync(outputPath)) {
-        outputPath = path.join(outDir, `${name}(${counter})${actualExt}`);
-        counter++;
-    }
+    // 独占占位命名，杜绝先判后写竞争
+    const outputPath = await allocateFilePath(outDir, name, actualExt);
 
     try {
         const originalImage = sharp(filePath);
@@ -50,10 +45,7 @@ export async function processCenter(
         const contentW = probeInfo.width;
         const contentH = probeInfo.height;
 
-        // 如果探测出的内容就是全图，没必要处理
-        if (contentW === originalW && contentH === originalH) {
-            // 实际上也可以继续，但为了性能可以跳过，或者直接复制
-        }
+        // 探测出内容即全图时无需特殊处理，直接走统一居中流水线
 
         // 2. 计算轴向总可用边距 (Total Margins)
         const totalHorizontalMargin = originalW - contentW;
@@ -108,23 +100,14 @@ export async function processCenter(
                 background: config.fillColor === 'transparent' ? { r: 0, g: 0, b: 0, alpha: 0 } : config.fillColor
             });
 
-        // 4. 编码保存
-        switch (actualExt) {
-            case '.webp':
-                pipeline = pipeline.webp({ quality: 90, effort: 6 });
-                break;
-            case '.png':
-                pipeline = pipeline.png({ quality: 90, effort: 8 });
-                break;
-            case '.jpg':
-            case '.jpeg':
-                pipeline = pipeline.jpeg({ quality: 90, mozjpeg: true });
-                break;
-        }
+        // 统一编码后落盘（未知扩展原样透传）
+        pipeline = applyEncoding(pipeline, actualExt);
 
         await pipeline.toFile(outputPath);
         return { status: 'success', file: filePath };
     } catch (err: unknown) {
+        // 占位由本进程独占创建：失败时删同路径幽灵空文件，不碰目录
+        await fsp.unlink(outputPath).catch(() => {});
         let errMsg = '未知错误';
         if (err instanceof Error) {
             errMsg = err.message;

@@ -1,15 +1,28 @@
 import sharp from 'sharp';
-import fs from 'fs';
 import path from 'path';
+import { promises as fsp } from 'fs';
 
 import { TrimConfig, CropConfig } from './cli';
+import type { OpResult } from './shared/results';
+import { ensureDir, allocateFilePath } from './shared/output-naming';
+import { applyEncoding } from './shared/encode';
+import { normalizeExt } from './shared/formats';
 
-export interface TrimResult {
-    status: 'success' | 'error' | 'skipped';
-    file: string;
-    reason?: string;
-}
+// 兼容旧名：统一复用共享操作结果类型
+export type TrimResult = OpResult;
 
+export function processTrimOrCrop(
+    filePath: string,
+    action: 'trim',
+    config: TrimConfig,
+    formatExt: string | null
+): Promise<TrimResult>;
+export function processTrimOrCrop(
+    filePath: string,
+    action: 'crop',
+    config: CropConfig,
+    formatExt: string | null
+): Promise<TrimResult>;
 export async function processTrimOrCrop(
     filePath: string,
     action: 'trim' | 'crop',
@@ -20,43 +33,38 @@ export async function processTrimOrCrop(
     const ext = path.extname(filePath);
     const name = path.basename(filePath, ext);
 
-    const actualExt = formatExt || ext.toLowerCase();
+    // 输出扩展名归一化（小写；.jpeg→.jpg），未知格式原样透传
+    const actualExt = normalizeExt(formatExt || ext);
     const isTrim = action === 'trim';
     const subDirName = isTrim ? 'trimmed' : 'cropped';
     const outDir = path.join(dir, subDirName);
+    await ensureDir(outDir);
 
-    if (!fs.existsSync(outDir)) {
-        fs.mkdirSync(outDir, { recursive: true });
-    }
-
-    let outputPath = path.join(outDir, `${name}${actualExt}`);
-    let counter = 1;
-    while (fs.existsSync(outputPath)) {
-        outputPath = path.join(outDir, `${name}(${counter})${actualExt}`);
-        counter++;
-    }
+    // 占位路径声明：allocate 移到全部参数校验之后，校验早退时尚无占位可泄漏
+    let outputPath = '';
 
     try {
+        // 元数据只读一次，trim/crop 分支复用
+        const metadata = await sharp(filePath).metadata();
+        const originalW = metadata.width || 0;
+        const originalH = metadata.height || 0;
+
         let sharpInstance = sharp(filePath);
 
-        // 关键逻辑分支：trim vs crop
+        // 关键逻辑分支：trim vs crop（重载签名保证配对，in 守卫再收窄）
         if (action === 'trim') {
-            const trimCfg = config as TrimConfig;
+            if (!('threshold' in config)) {
+                return { status: 'error', file: filePath, reason: 'trim 配置缺少 threshold。' };
+            }
+            const trimCfg = config;
 
             // --- 智能边向选择探底方案 ---
-            // 1. 获取原图尺寸用于对照
-            const originalMeta = await sharpInstance.metadata();
-            const originalW = originalMeta.width || 0;
-            const originalH = originalMeta.height || 0;
-
-            // 2. 隐式测试：仅在内存中执行全方位 Trim 看能切出什么边界
+            // 隐式测试：仅在内存中执行全方位 Trim 看能切出什么边界
             const testProbe = sharp(filePath).trim({ threshold: trimCfg.threshold });
             const { info: probeInfo } = await testProbe.toBuffer({ resolveWithObject: true });
 
-            // 如果根本没有发生切除行为 (原始尺寸不变)，直接按原图保存跳过后续复杂运算
-            if (probeInfo.width === originalW && probeInfo.height === originalH) {
-                // 没有被切去白边，无需提取动作
-            } else {
+            // 仅当确实发生切除行为（尺寸变化）才进入后续运算，否则按原图保存
+            if (probeInfo.width !== originalW || probeInfo.height !== originalH) {
                 // 解析出系统探测认为应当剔除的四个方位像素量
                 // trimOffsetLeft / trimOffsetTop 是被裁切后剩余图像相对于原图左上角的偏移，本质上就是左边和上边被切掉的像素数
                 const cutLeft = -(probeInfo.trimOffsetLeft || 0);
@@ -82,9 +90,8 @@ export async function processTrimOrCrop(
                     return { status: 'error', file: filePath, reason: '容差计算结果为空或越界。' };
                 }
 
-                if (newWidth === originalW && newHeight === originalH) {
-                    // 过滤筛选后等价于一刀没切
-                } else {
+                // 过滤筛选后等价于一刀没切时直接跳过 extract
+                if (newWidth !== originalW || newHeight !== originalH) {
                     sharpInstance = sharpInstance.extract({
                         left: finalLeft,
                         top: finalTop,
@@ -94,14 +101,13 @@ export async function processTrimOrCrop(
                 }
             }
         } else {
-            const cropCfg = config as CropConfig;
-            // 需预先知道图片的实际宽高，才能防止切除过度报错
-            const metadata = await sharpInstance.metadata();
-            const width = metadata.width || 0;
-            const height = metadata.height || 0;
-
-            const newWidth = width - cropCfg.left - cropCfg.right;
-            const newHeight = height - cropCfg.top - cropCfg.bottom;
+            if (!('top' in config)) {
+                return { status: 'error', file: filePath, reason: 'crop 配置缺少边距。' };
+            }
+            const cropCfg = config;
+            // 复用已读元数据，防止切除过度报错
+            const newWidth = originalW - cropCfg.left - cropCfg.right;
+            const newHeight = originalH - cropCfg.top - cropCfg.bottom;
 
             if (newWidth <= 0 || newHeight <= 0) {
                 return { status: 'error', file: filePath, reason: '裁剪范围大于原图尺寸，将导致图像消失！' };
@@ -115,23 +121,16 @@ export async function processTrimOrCrop(
             });
         }
 
-        // 根据格式进行最终编码存储
-        switch (actualExt) {
-            case '.webp':
-                sharpInstance = sharpInstance.webp({ quality: 90, effort: 6 });
-                break;
-            case '.png':
-                sharpInstance = sharpInstance.png({ quality: 90, effort: 8 });
-                break;
-            case '.jpg':
-            case '.jpeg':
-                sharpInstance = sharpInstance.jpeg({ quality: 90, mozjpeg: true });
-                break;
-        }
+        // O_EXCL 独占占位命名：全部参数校验通过后才建占位，早退路径无残留
+        outputPath = await allocateFilePath(outDir, name, actualExt);
+        // 统一编码后落盘（未知扩展原样透传）
+        sharpInstance = applyEncoding(sharpInstance, actualExt);
 
         await sharpInstance.toFile(outputPath);
         return { status: 'success', file: filePath };
     } catch (err: unknown) {
+        // 占位由本进程独占创建：失败时删同路径幽灵空文件，不碰目录；早退前无占位则跳过
+        if (outputPath) await fsp.unlink(outputPath).catch(() => {});
         let errMsg = '未知错误';
         if (err instanceof Error) {
             errMsg = err.message;

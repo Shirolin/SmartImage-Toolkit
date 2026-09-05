@@ -1,30 +1,28 @@
 import sharp from 'sharp';
-import fs from 'fs';
 import path from 'path';
 import url from 'url';
 import chalk from 'chalk';
+import { promises as fsp } from 'fs';
 import { removeBackground } from '@imgly/background-removal-node';
 
 import type { TargetFormat, AiModel } from './cli';
+import { resolveImageExt, equalExt } from './shared/formats';
+import { applyEncoding } from './shared/encode';
+import { allocateFilePath } from './shared/output-naming';
+import type { OpResult } from './shared/results';
 
-// 解决通过 Node 运行与 Web API blob 类型混合引发的编译错误
-// 我们将底层库实际操作的输入视为通用 Blob 接口
-interface WebBlob extends Blob {
-    readonly size: number;
-    readonly type: string;
-    arrayBuffer(): Promise<ArrayBuffer>;
-}
-
-export interface ConvertResult {
-    status: 'success' | 'error' | 'skipped';
-    file: string;
-    reason?: string;
-}
+// 旧名兼容：统一结果类型
+export type ConvertResult = OpResult;
 
 // 定义一个基础 Spinner 类型接口，由于不想让核心层强依赖特定 UI 库
 export interface SpinnerLike {
     text: string;
     render(): void;
+}
+
+// 是否为可用 Blob（带 arrayBuffer 方法）
+function isBlobLike(value: unknown): value is Blob {
+    return typeof value === 'object' && value !== null && typeof (value as Blob).arrayBuffer === 'function';
 }
 
 /**
@@ -46,29 +44,28 @@ export async function convertImage(
 
     switch (format) {
         case 'webp':
-            outputExt = '.webp';
-            if (ext.toLowerCase() === '.webp') return { status: 'skipped', file: filePath, reason: '已经是该格式' };
-            sharpInstance = sharpInstance.webp({ quality: 80, effort: 6 });
+            outputExt = resolveImageExt('webp', ext);
+            if (equalExt(ext, '.webp')) return { status: 'skipped', file: filePath, reason: '已经是该格式' };
+            sharpInstance = applyEncoding(sharpInstance, outputExt);
             break;
         case 'png':
-            outputExt = '.png';
+            outputExt = resolveImageExt('png', ext);
             suffix = '_optimized';
-            sharpInstance = sharpInstance.png({ quality: 75, colors: 256, dither: 1.0, effort: 8 });
+            sharpInstance = applyEncoding(sharpInstance, outputExt);
             break;
         case 'avif':
             outputExt = '.avif';
-            if (ext.toLowerCase() === '.avif') return { status: 'skipped', file: filePath, reason: '已经是该格式' };
+            if (equalExt(ext, '.avif')) return { status: 'skipped', file: filePath, reason: '已经是该格式' };
             sharpInstance = sharpInstance.avif({ quality: 75, effort: 7 });
             break;
         case 'mozjpeg':
-            outputExt = '.jpg';
+            outputExt = resolveImageExt('mozjpeg', ext);
             suffix = '_optimized';
-            sharpInstance = sharpInstance.jpeg({ quality: 85, mozjpeg: true, chromaSubsampling: '4:4:4' });
+            sharpInstance = applyEncoding(sharpInstance, outputExt);
             break;
         case 'rmbg_solid': {
-            outputExt = ext.toLowerCase() === '.webp' ? '.webp' : '.png';
+            outputExt = equalExt(ext, '.webp') ? resolveImageExt('webp', ext) : resolveImageExt('png', ext);
             suffix = '_nobg';
-            // 内存防漏保护变量
             let normalizedBuffer: Buffer | null = null;
             let finalBuffer: Buffer | null = null;
 
@@ -78,7 +75,6 @@ export async function convertImage(
                     spinnerInstance.render();
                 }
 
-                // 细化前置错误捕获（针对格式异常/图片损坏）
                 try {
                     normalizedBuffer = await sharp(filePath).png().toBuffer();
                 } catch (sharpErr: unknown) {
@@ -89,30 +85,45 @@ export async function convertImage(
                     throw new Error(`图片文件解析失败 (文件可能已损坏或不支持此处理): ${errMsg}`);
                 }
 
-                // 手动构造无类型歧义的强类型 Blob，绕过底层解析 Bug
-                const { Blob } = await import('buffer');
-                // 使用 Uint8Array 包装 Buffer 以契合 Web 标准 BlobPart 的需要
+                // 全局 Blob 即 DOM 标准类型，直接满足 removeBackground 入参
                 const inputBlob = new Blob([new Uint8Array(normalizedBuffer)], {
                     type: 'image/png'
-                }) as unknown as WebBlob;
+                });
 
-                const blob = await removeBackground(inputBlob as Blob, {
-                    publicPath:
-                        url.pathToFileURL(
-                            path.join(__dirname, '..', 'node_modules', '@imgly', 'background-removal-node', 'dist')
-                        ).href + '/',
+                // 模型资源先验存在性：缺失时给明确报错而非 removeBackground 的晦涩异常
+                // （lib 产物布局下 __dirname=dist/lib，.. 后即 dist/node_modules，dist 包自带）
+                const modelDir = path.join(
+                    __dirname,
+                    '..',
+                    'node_modules',
+                    '@imgly',
+                    'background-removal-node',
+                    'dist'
+                );
+                try {
+                    await fsp.access(modelDir);
+                } catch {
+                    throw new Error(`AI 模型资源缺失: ${modelDir} 不存在，请先执行 npm install 安装依赖后重试`);
+                }
+
+                const blob: Blob = await removeBackground(inputBlob, {
+                    publicPath: url.pathToFileURL(modelDir).href + '/',
                     model: aiModel,
                     output: {
                         format: 'image/x-rgba8',
                         quality: 1.0
                     },
                     progress: (key: string, current: number, total: number) => {
-                        const percent = ((current / total) * 100).toFixed(1);
-                        if (spinnerInstance) {
-                            spinnerInstance.text = chalk.yellow(
-                                `🧠 [AI 处理中] 图像: ${name} | 模型(${aiModel}): ${percent}%`
-                            );
-                            spinnerInstance.render();
+                        try {
+                            const percent = ((current / total) * 100).toFixed(1);
+                            if (spinnerInstance) {
+                                spinnerInstance.text = chalk.yellow(
+                                    `🧠 [AI 处理中] 图像: ${name} | 模型(${aiModel}): ${percent}%`
+                                );
+                                spinnerInstance.render();
+                            }
+                        } catch {
+                            // 进度渲染失败不污染 AI 推理本身（并发批处理共用 spinner）
                         }
                     }
                 });
@@ -122,13 +133,13 @@ export async function convertImage(
                     spinnerInstance.render();
                 }
 
-                // 通过对未知 blob 再次进行安全转换，以此保障 ArrayBuffer 可以正常调起
-                const resultBlob = blob as unknown as WebBlob;
-                const arrayBuffer = await resultBlob.arrayBuffer();
+                if (!isBlobLike(blob)) {
+                    throw new Error('AI 处理异常: 返回结果缺少 arrayBuffer');
+                }
+                const arrayBuffer = await blob.arrayBuffer();
                 const aiResultBuffer = Buffer.from(arrayBuffer);
                 const metadata = await sharp(normalizedBuffer).metadata();
 
-                // 根据底层文档 image/x-rgba8 数据格式提取并直接交给 Sharp 原生组装
                 let resultSharp = sharp(aiResultBuffer, {
                     raw: {
                         width: metadata.width ?? 0,
@@ -137,11 +148,7 @@ export async function convertImage(
                     }
                 });
 
-                if (outputExt === '.webp') {
-                    resultSharp = resultSharp.webp({ lossless: true, effort: 6 });
-                } else {
-                    resultSharp = resultSharp.png({ effort: 8 });
-                }
+                resultSharp = applyEncoding(resultSharp, outputExt);
 
                 finalBuffer = await resultSharp.toBuffer();
                 sharpInstance = sharp(finalBuffer);
@@ -157,6 +164,7 @@ export async function convertImage(
                 };
             } finally {
                 normalizedBuffer = null;
+                finalBuffer = null;
             }
             break;
         }
@@ -164,18 +172,15 @@ export async function convertImage(
             return { status: 'error', file: filePath, reason: '不支持的目标格式' };
     }
 
-    // 自动重命名逻辑：检测文件是否存在，如果存在则添加 (1), (2) 后缀
-    let outputPath = path.join(dir, `${name}${suffix}${outputExt}`);
-    let counter = 1;
-    while (fs.existsSync(outputPath)) {
-        outputPath = path.join(dir, `${name}${suffix}(${counter})${outputExt}`);
-        counter++;
-    }
+    // 独占命名：占位后直接落盘，避免并发重名
+    const outputPath = await allocateFilePath(dir, `${name}${suffix}`, outputExt);
 
     try {
         await sharpInstance.toFile(outputPath);
         return { status: 'success', file: filePath };
     } catch (err: unknown) {
+        // 占位由本进程独占创建：编码失败时删同路径幽灵空文件，不碰目录
+        await fsp.unlink(outputPath).catch(() => {});
         let saveErr = '未能保存文件';
         if (err instanceof Error) {
             saveErr = err.message;

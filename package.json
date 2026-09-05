@@ -5,13 +5,14 @@
         "node": ">=20"
     },
     "scripts": {
-        "start": "node lib/convert.js",
+        "start": "node bootstrap.js",
         "ui": "node bootstrap.js",
         "type-check": "tsc --noEmit",
         "test": "vitest run",
         "format": "prettier --write .",
+        "fix": "npm run format",
         "lint": "eslint .",
-        "build": "npm run format && npm run lint && npm run type-check && tsc"
+        "build": "npm run lint && npm run type-check && tsc --project tsconfig.build.json"
     },
     "keywords": [],
     "author": "",
@@ -29,7 +30,7 @@
         "@eslint/js": "^9.39.3",
         "@types/cors": "^2.8.19",
         "@types/express": "^5.0.6",
-        "@types/node": "^25.3.3",
+        "@types/node": "~20.12.0",
         "@typescript-eslint/eslint-plugin": "^8.56.1",
         "@typescript-eslint/parser": "^8.56.1",
         "eslint": "^9.39.3",

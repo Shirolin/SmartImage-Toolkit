@@ -30,8 +30,14 @@ call npm install --silent
 if %errorlevel% neq 0 goto :NPM_FAILED
 
 :RUN_NODE
-:: 运行阶段：利用 ts-node 无缝执行 TypeScript
-call "%CD%\node_modules\.bin\ts-node.cmd" src\convert.ts --interactive %*
+:: 运行链路（与 bootstrap 的快路径思想对齐，二选一）：
+::   1) dist/生产包优先走已编译产物 node lib\convert.js --interactive（无需 devDeps，干净机可跑）；
+::   2) 开发目录无 lib 时回落 ts-node 直跑 src\convert.ts --interactive（需已安装 devDeps）。
+if exist "lib\convert.js" (
+    call "%NODE_EXE%" lib\convert.js --interactive %*
+) else (
+    call "%CD%\node_modules\.bin\ts-node.cmd" src\convert.ts --interactive %*
+)
 
 if %errorlevel% neq 0 goto :RUN_ERROR
 

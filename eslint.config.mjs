@@ -10,8 +10,8 @@ export default tseslint.config(
     {
         rules: {
             '@typescript-eslint/no-var-requires': 'off', // 允许使用 require，因为我们基于 CommonJS 开发
-            '@typescript-eslint/no-explicit-any': 'off',
-            '@typescript-eslint/ban-ts-comment': 'off'
+            '@typescript-eslint/no-explicit-any': 'warn', // P3 收敛：先告警不清零，保证全绿后再收紧为 error
+            '@typescript-eslint/ban-ts-comment': 'warn' // 同上：先告警，本轮不断构建
         }
     },
     {

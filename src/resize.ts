@@ -1,6 +1,11 @@
 import sharp from 'sharp';
-import fs from 'fs';
 import path from 'path';
+import { promises as fsp } from 'fs';
+
+import { normalizeExt, equalExt } from './shared/formats';
+import { applyEncoding } from './shared/encode';
+import { allocateFilePath } from './shared/output-naming';
+import type { OpResult } from './shared/results';
 
 export interface ResizeOptions {
     mode: 'by_width' | 'by_height' | 'by_percent' | 'custom';
@@ -10,11 +15,8 @@ export interface ResizeOptions {
     fit?: 'cover' | 'contain' | 'fill' | 'inside';
 }
 
-export interface ResizeResult {
-    status: 'success' | 'error' | 'skipped';
-    file: string;
-    reason?: string;
-}
+// 旧名兼容：统一结果类型
+export type ResizeResult = OpResult;
 
 /**
  * 图像缩放核心引擎
@@ -31,13 +33,12 @@ export async function resizeImage(
     const ext = path.extname(filePath);
     const name = path.basename(filePath, ext);
 
-    let outputExt = formatExt || ext.toLowerCase();
+    // 归一化输出扩展名：调用方传入 .jpeg 或大写时统一为 .jpg 等
+    const normalizedFormat = formatExt ? normalizeExt(formatExt) : null;
+    const outputExt = normalizedFormat ?? normalizeExt(ext);
     const suffix = '_resized';
-
-    // 如果没有明确指定格式，而且是 jpeg，统一转为了 .jpg，也可以保留原本扩展名
-    if (!formatExt && (outputExt === '.jpeg' || outputExt === '.JPG' || outputExt === '.JPEG')) {
-        outputExt = '.jpg';
-    }
+    // 占位路径外置声明：元数据失败时尚未占位，catch 需守卫
+    let outputPath: string | undefined;
 
     try {
         const metadata = await sharp(filePath).metadata();
@@ -53,20 +54,22 @@ export async function resizeImage(
             case 'by_width':
                 if (!options.width) return { status: 'error', file: filePath, reason: '按宽度缩放缺少宽度参数' };
                 targetWidth = Math.round(options.width);
-                if (targetWidth === metadata.width && (!formatExt || formatExt === ext.toLowerCase())) {
+                if (targetWidth === metadata.width && (!normalizedFormat || equalExt(normalizedFormat, ext))) {
                     return { status: 'skipped', file: filePath, reason: '由于宽度未变化且未要求格式转换，已跳过' };
                 }
                 break;
             case 'by_height':
                 if (!options.height) return { status: 'error', file: filePath, reason: '按高度缩放缺少高度参数' };
                 targetHeight = Math.round(options.height);
-                if (targetHeight === metadata.height && (!formatExt || formatExt === ext.toLowerCase())) {
+                if (targetHeight === metadata.height && (!normalizedFormat || equalExt(normalizedFormat, ext))) {
                     return { status: 'skipped', file: filePath, reason: '由于高度未变化且未要求格式转换，已跳过' };
                 }
                 break;
             case 'by_percent':
-                if (!options.percent) return { status: 'error', file: filePath, reason: '按比例缩放缺少百分比参数' };
-                if (options.percent === 100 && (!formatExt || formatExt === ext.toLowerCase())) {
+                // 负数与 0/缺失同等视为非法：钳到 1px 记成功会掩盖参数错误
+                if (!options.percent || options.percent <= 0)
+                    return { status: 'error', file: filePath, reason: '按比例缩放缺少百分比参数' };
+                if (options.percent === 100 && (!normalizedFormat || equalExt(normalizedFormat, ext))) {
                     return { status: 'skipped', file: filePath, reason: '比例为100%且未要求格式转换，已跳过' };
                 }
                 targetWidth = Math.round(metadata.width * (options.percent / 100));
@@ -81,7 +84,7 @@ export async function resizeImage(
                 if (
                     targetWidth === metadata.width &&
                     targetHeight === metadata.height &&
-                    (!formatExt || formatExt === ext.toLowerCase())
+                    (!normalizedFormat || equalExt(normalizedFormat, ext))
                 ) {
                     return { status: 'skipped', file: filePath, reason: '宽高均未变化且未要求格式转换，已跳过' };
                 }
@@ -106,32 +109,19 @@ export async function resizeImage(
             });
         }
 
-        // 处理输出格式转换
-        if (formatExt) {
-            switch (formatExt) {
-                case '.webp':
-                    sharpInstance = sharpInstance.webp({ quality: 80, effort: 6 });
-                    break;
-                case '.png':
-                    sharpInstance = sharpInstance.png({ quality: 75, colors: 256, dither: 1.0, effort: 8 });
-                    break;
-                case '.jpg':
-                    sharpInstance = sharpInstance.jpeg({ quality: 85, mozjpeg: true, chromaSubsampling: '4:4:4' });
-                    break;
-            }
+        // 统一编码：按目标扩展名应用输出配置
+        if (normalizedFormat) {
+            sharpInstance = applyEncoding(sharpInstance, normalizedFormat);
         }
 
-        // 自动重命名逻辑：检测文件是否存在，如果存在则添加 (1), (2) 后缀
-        let outputPath = path.join(dir, `${name}${suffix}${outputExt}`);
-        let counter = 1;
-        while (fs.existsSync(outputPath)) {
-            outputPath = path.join(dir, `${name}${suffix}(${counter})${outputExt}`);
-            counter++;
-        }
+        // 独占命名：占位后直接落盘，避免并发重名
+        outputPath = await allocateFilePath(dir, `${name}${suffix}`, outputExt);
 
         await sharpInstance.toFile(outputPath);
         return { status: 'success', file: filePath };
     } catch (err: unknown) {
+        // 占位由本进程独占创建：失败时删同路径幽灵空文件，不碰目录
+        if (outputPath) await fsp.unlink(outputPath).catch(() => {});
         let saveErr = '未能处理或保存文件';
         if (err instanceof Error) {
             saveErr = err.message;

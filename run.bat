@@ -30,8 +30,15 @@ call npm install --silent
 if %errorlevel% neq 0 goto :NPM_FAILED
 
 :RUN_NODE
-:: 运行阶段：利用 ts-node 无缝执行 TypeScript
-call "%CD%\node_modules\.bin\ts-node.cmd" src\convert.ts --format webp %*
+:: 运行链路（与 bootstrap 的快路径思想对齐，二选一）：
+::   1) dist/生产包优先走已编译产物 node lib\convert.js（无需 devDeps，干净机可跑）；
+::   2) 开发目录无 lib 时回落 ts-node 直跑 src\convert.ts（需已安装 devDeps）。
+:: 默认格式由 convert.ts 内定为 webp，此处不再硬编码 --format，避免吞掉 %* 中用户自传的 --format。
+if exist "lib\convert.js" (
+    call "%NODE_EXE%" lib\convert.js %*
+) else (
+    call "%CD%\node_modules\.bin\ts-node.cmd" src\convert.ts %*
+)
 
 if %errorlevel% neq 0 goto :RUN_ERROR
 

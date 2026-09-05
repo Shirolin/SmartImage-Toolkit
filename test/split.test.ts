@@ -22,8 +22,9 @@ describe('splitImage', () => {
             expect(meta.width).toBe(200);
             expect(meta.height).toBe(100);
         }
-        // generatedFiles 应包含全部切片与切割配置
-        expect(result.generatedFiles.length).toBeGreaterThanOrEqual(5);
+        // generatedFiles 只保留切片图；切割配置改记 artifacts
+        expect(result.generatedFiles).toHaveLength(4);
+        expect(result.artifacts.map((f) => path.basename(f))).toContain('split_config.json');
     });
 
     it('自定义切割线按坐标切分', async () => {

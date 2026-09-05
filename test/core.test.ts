@@ -57,5 +57,7 @@ describe('convertImage', () => {
         const result = await convertImage(missing, 'webp', null);
         expect(result.status).toBe('error');
         expect(result.reason).toBeTruthy();
+        // 占位无残留：同名 .webp 幽灵空文件必须被清理
+        expect(fs.existsSync(path.join(dir, 'ghost.webp'))).toBe(false);
     });
 });

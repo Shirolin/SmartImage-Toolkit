@@ -64,7 +64,9 @@ New-Item -ItemType Directory -Path (Join-Path $DistDir "ui") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $DistDir "src") -Force | Out-Null
 
 $ItemsToCopy = @(
-    "lib/convert.js",
+    # 编译产物整目录：含 convert/server/split 及 shared/cli/prompts 等全部运行时模块
+    # （与 tsconfig.build.json 的 rootDir=src 扁平布局对应：lib/*.js + lib/shared/*.js）
+    "lib",
     "run.bat",
     "run_interactive.bat",
     "start-ui.bat",
@@ -72,8 +74,19 @@ $ItemsToCopy = @(
     "ui/index.html",
     "ui/style.css",
     "ui/app.js",
+    # ts-node 开发模式回落链路所需的全部运行时源码（含新拆分模块；server/split 照旧保留）
+    "src/convert.ts",
     "src/server.ts",
     "src/split.ts",
+    "src/cli.ts",
+    "src/config-types.ts",
+    "src/prompts.ts",
+    "src/core.ts",
+    "src/utils.ts",
+    "src/trim.ts",
+    "src/center.ts",
+    "src/resize.ts",
+    "src/shared",
     "scripts/install.ps1",
     "scripts/uninstall.ps1",
     "package.json",

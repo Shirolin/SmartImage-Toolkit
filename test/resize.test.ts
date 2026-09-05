@@ -90,3 +90,19 @@ describe('resizeImage', () => {
         expect(outputs).toEqual(['tojpg_resized.jpg']);
     });
 });
+
+describe('resizeImage by_percent 非法输入', () => {
+    it('负数与 0 同等返回 error，不产生 1px 成功文件', async () => {
+        const dir = makeTempDir();
+        const src = path.join(dir, 'neg.png');
+        await createPng(src, 100, 80);
+
+        const neg = await resizeImage(src, { mode: 'by_percent', percent: -50 });
+        expect(neg.status).toBe('error');
+        expect(neg.reason).toBeTruthy();
+
+        const zero = await resizeImage(src, { mode: 'by_percent', percent: 0 });
+        expect(zero.status).toBe('error');
+        expect(fs.readdirSync(dir)).toEqual(['neg.png']);
+    });
+});

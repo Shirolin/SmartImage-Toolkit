@@ -1,10 +1,18 @@
 const canvas = document.getElementById('editorCanvas');
-const ctx = canvas.getContext('2d');
+const ctx = canvas ? canvas.getContext('2d') : null;
 const imgPathInput = document.getElementById('imgPathInput');
 const loadBtn = document.getElementById('loadBtn');
 const splitBtn = document.getElementById('splitBtn');
 const exitBtn = document.getElementById('exitBtn');
 const statusMsg = document.getElementById('statusMsg');
+
+// 关键元素空守卫：模板缺失 id 时尽早给出明确报错，避免后续空指针难以排查
+if (!canvas || !ctx) {
+    console.error('[UI] 缺少画布元素 #editorCanvas，编辑器无法初始化');
+}
+if (!imgPathInput || !loadBtn || !splitBtn || !exitBtn || !statusMsg) {
+    console.error('[UI] 缺少关键表单元素，图片加载/切图/退出流程可能不可用');
+}
 
 // 新增工具栏元素
 const zoomPercent = document.getElementById('zoomPercent');
@@ -172,6 +180,10 @@ async function init() {
 }
 
 function showStatus(msg, type = 'success') {
+    if (!statusMsg) {
+        console.warn('[UI] 状态栏缺失，仅控制台记录:', msg);
+        return;
+    }
     statusMsg.textContent = msg;
     statusMsg.className = `status-msg ${type}`;
     setTimeout(() => {
@@ -199,6 +211,7 @@ loadBtn.addEventListener('click', async () => {
             if (absolutePath) loadImage(absolutePath);
         }
     } catch {
+        showStatus('文件选择器调用失败，已尝试使用输入框中的路径', 'error');
         const p = imgPathInput.value.trim();
         if (p) loadImage(p);
     } finally {
@@ -629,7 +642,12 @@ splitBtn.addEventListener('click', async () => {
         const data = await res.json();
 
         if (data.success) {
-            showStatus('✨ 切割成功！产物已输出到与原图同级的目录下。', 'success');
+            const failed = Array.isArray(data.failedTiles) ? data.failedTiles : [];
+            if (failed.length > 0) {
+                showStatus(`⚠️ 部分成功（${failed.length} 张失败），其余产物已输出到与原图同级的目录下。`, 'success');
+            } else {
+                showStatus('✨ 切割成功！产物已输出到与原图同级的目录下。', 'success');
+            }
         } else {
             showStatus('❌ 错误: ' + data.error, 'error');
         }
@@ -720,7 +738,12 @@ window.addEventListener('drop', (e) => {
 
 init();
 
-// 每 1 分钟发送一次心跳，证明页面仍在开启状态，防止服务端因闲置超时而自动关闭
+// 心跳周期 60000ms：与服务端 src/shared/constants.ts 的 HEARTBEAT_MS=60000 同源。
+// 前端无构建流程，保持字面量；若服务端调整该常量，需同步修改此处间隔。
+// 约定：心跳只证明页面存活，不刷新服务端闲置计时（见 server.ts 顶部语义说明）。
 setInterval(() => {
-    fetch('/api/heartbeat').catch(() => {});
+    fetch('/api/heartbeat').catch((err) => {
+        // 心跳失败不弹状态提示（避免每分钟打扰用户），仅控制台留痕
+        console.debug('[UI] 心跳发送失败:', err && err.message ? err.message : err);
+    });
 }, 60000);
