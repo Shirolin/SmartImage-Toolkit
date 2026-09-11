@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul
-mode con cols=85 lines=25
+rem Silence mode con: it fails noisily on consoles that cannot be resized.
+mode con cols=85 lines=25 >nul 2>nul
 color 0f
 echo =====================================================================================
 echo    🚀 SmartImage-Toolkit (静默转换版)
@@ -8,21 +9,24 @@ echo ===========================================================================
 echo.
 echo ⚙️ [启动] 正在检查运行环境并启动引擎...
 
-:: 优先检查本地便携版 Node.js
+rem IMPORTANT: keep every comment in this file ASCII-only and start it with "rem".
+rem cmd.exe mis-reads "::" comment lines that contain non-ASCII text while the console
+rem code page is 65001: it drops the "::" prefix and runs the rest of the line as a command
+rem (symptom: "'xxx' is not recognized as an internal or external command").
+rem Prefer the bundled portable runtime (bin\node.exe).
 set "NODE_EXE=%~dp0bin\node.exe"
 if not exist "%NODE_EXE%" (
-    :: 如果没有便携版，再检查系统级 Node.js
+    rem No bundled runtime found: fall back to a system-wide node.
+    rem Checked with "if errorlevel" on purpose - %errorlevel% inside a block is expanded
+    rem before "where" runs, so any earlier failure (e.g. mode con) would fake a miss.
     where node >nul 2>nul
-    if %errorlevel% equ 0 (
-        set "NODE_EXE=node"
-    ) else (
-        goto :MISSING_NODE
-    )
+    if errorlevel 1 goto :MISSING_NODE
+    set "NODE_EXE=node"
 )
 
 cd /d "%~dp0"
 
-:: 检查 node_modules 是否存在
+rem Install dependencies on first run.
 if exist "node_modules\" goto :RUN_NODE
 
 echo 📦 [安装] 首次运行，正在自动配置必要组件，请稍候...
@@ -30,10 +34,11 @@ call npm install --silent
 if %errorlevel% neq 0 goto :NPM_FAILED
 
 :RUN_NODE
-:: 运行链路（与 bootstrap 的快路径思想对齐，二选一）：
-::   1) dist/生产包优先走已编译产物 node lib\convert.js（无需 devDeps，干净机可跑）；
-::   2) 开发目录无 lib 时回落 ts-node 直跑 src\convert.ts（需已安装 devDeps）。
-:: 默认格式由 convert.ts 内定为 webp，此处不再硬编码 --format，避免吞掉 %* 中用户自传的 --format。
+rem Launch chain (same idea as the bootstrap fast path, pick one):
+rem   1) packaged build: compiled output is preferred, node lib\convert.js (no devDeps, clean machine).
+rem   2) dev checkout without lib: fall back to ts-node on src\convert.ts (needs devDeps).
+rem Default format is webp inside convert.ts; never hardcode --format here or it swallows the
+rem user's own --format passed through %*.
 if exist "lib\convert.js" (
     call "%NODE_EXE%" lib\convert.js %*
 ) else (
@@ -42,7 +47,7 @@ if exist "lib\convert.js" (
 
 if %errorlevel% neq 0 goto :RUN_ERROR
 
-:: 运行成功，自动关闭黑窗前稍微停留一点时间
+rem Success: keep the window up briefly before closing.
 echo.
 echo ✅ [就绪] 转换成功！窗口将在 5 秒后优雅地自动关闭...
 timeout /t 5 >nul

@@ -1,16 +1,20 @@
 @echo off
-:: 接收所有拖拽或“发送到”进来的参数（多张图片）
+rem IMPORTANT: keep every comment in this file ASCII-only and start it with "rem".
+rem cmd.exe mis-reads "::" comment lines that contain non-ASCII text while the console
+rem code page is 65001: it drops the "::" prefix and runs the rest of the line as a command
+rem (symptom: "'xxx' is not recognized as an internal or external command").
+rem Accepts every dragged / "Send to" argument (several images at once).
 setlocal enabledelayedexpansion
 
 cd /d "%~dp0"
 
-:: 如果没有参数，直接启动打开一个空界面
+rem No arguments: open an empty UI.
 if "%~1"=="" (
     start cmd /c "node bootstrap.js"
     exit /b
 )
 
-:: 遍历所有传进来的图片参数，为每一张图片都并发出一个进程打开网页
+rem One concurrent process (and browser page) per image argument.
 :loop
 if "%~1"=="" goto end
 start cmd /c "node bootstrap.js "%~1""
