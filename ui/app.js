@@ -107,8 +107,9 @@ snapToggle.addEventListener('change', (e) => {
 // 等分功能
 applyDivideBtn.addEventListener('click', () => {
     if (!currentImage) return;
-    const rows = parseInt(divideRowsInput.value) || 1;
-    const cols = parseInt(divideColsInput.value) || 1;
+    // 裁剪到 [1,50]，避免负数/超大值生成非法或大量重复的切分线（服务端会因 cutX 非严格递增返回 400）
+    const rows = Math.min(50, Math.max(1, parseInt(divideRowsInput.value, 10) || 1));
+    const cols = Math.min(50, Math.max(1, parseInt(divideColsInput.value, 10) || 1));
     applyEqualDivide(rows, cols);
 });
 
@@ -126,10 +127,14 @@ function applyEqualDivide(rows, cols) {
         lines.y.push(Math.round((imgHeight * i) / rows));
     }
 
-    lines.x.sort((a, b) => a - b);
-    lines.y.sort((a, b) => a - b);
+    // 图宽/高小于份数时 Math.round 会产生重复坐标，去重保证切分线严格递增
+    lines.x = Array.from(new Set(lines.x)).sort((a, b) => a - b);
+    lines.y = Array.from(new Set(lines.y)).sort((a, b) => a - b);
     draw();
-    showStatus(`已等分为 ${rows} 行 × ${cols} 列 (${rows * cols} 块)`, 'success');
+    // 按去重后的实际块数显示，避免出现“已等分为 -5 行 × 1 列”之类与事实不符的文案
+    const actualCols = lines.x.length - 1;
+    const actualRows = lines.y.length - 1;
+    showStatus(`已等分为 ${actualRows} 行 × ${actualCols} 列 (${actualRows * actualCols} 块)`, 'success');
 }
 
 // 智能吸附
@@ -209,6 +214,9 @@ loadBtn.addEventListener('click', async () => {
             imgPathInput.classList.remove('path-warning'); // 消除警告
             const absolutePath = data.path.trim();
             if (absolutePath) loadImage(absolutePath);
+        } else {
+            // fetch 对 5xx 不抛错，成功分支之外必须显式提示，否则用户点击后毫无反馈
+            showStatus('❌ ' + (data.error || '文件选择器调用失败'), 'error');
         }
     } catch {
         showStatus('文件选择器调用失败，已尝试使用输入框中的路径', 'error');
@@ -459,8 +467,11 @@ window.addEventListener('mousemove', (e) => {
         rawValue = Math.max(0, Math.min(rawValue, draggingLine.axis === 'x' ? imgWidth : imgHeight));
         // 智能吸附
         const snapped = snapToNearest(rawValue, draggingLine.axis);
-        lines[draggingLine.axis][draggingLine.index] = snapped;
-        lines[draggingLine.axis].sort((a, b) => a - b);
+        const arr = lines[draggingLine.axis];
+        arr[draggingLine.index] = snapped;
+        arr.sort((a, b) => a - b);
+        // sort 后原下标可能已指向相邻线，必须回写新下标，否则后续事件会持续改写邻居造成“线自己跳回去”
+        draggingLine.index = arr.indexOf(snapped);
         draw();
         renderMagnifier(e, snapped, draggingLine.axis);
     } else {
@@ -618,6 +629,8 @@ function draw() {
 splitBtn.addEventListener('click', async () => {
     if (!currentImage) return;
     splitBtn.disabled = true;
+    // 切图正在写盘，退出会留下半截切片，处理期间一并禁用
+    exitBtn.disabled = true;
     showStatus('正在执行图像处理，请稍候...', 'success');
 
     try {
@@ -655,6 +668,7 @@ splitBtn.addEventListener('click', async () => {
         showStatus('请求失败: ' + e.message, 'error');
     } finally {
         splitBtn.disabled = false;
+        exitBtn.disabled = false;
     }
 });
 
