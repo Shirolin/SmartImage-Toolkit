@@ -19,7 +19,9 @@ const PORT = 3000;
 
 // CORS 头只决定浏览器能否**读取**响应，拦不住跨站的 simple request（POST /api/exit 无预检）。
 // 带非本机 Origin 的请求在这里直接拒绝，避免任意网页关掉本机服务或弹文件对话框。
-const LOOPBACK_ORIGIN = /^http:\/\/localhost(:\d+)?$/;
+// 回环有 localhost / 127.0.0.1 / [::1] 三种写法，缺一个就会让用另一写法打开的页面 403
+// （前端 <img crossOrigin="anonymous"> 会带 Origin，踩中即「加载失败」）。
+const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/;
 app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (typeof origin === 'string' && origin !== '' && !LOOPBACK_ORIGIN.test(origin)) {
