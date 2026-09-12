@@ -27,6 +27,8 @@ export async function customSelect<T>(message: string, choices: Choice<T>[]): Pr
     return new Promise<T>((resolve, reject) => {
         let selectedIndex = 0;
         let renderedLines = 0;
+        // 防止 Promise 被多次 settle（尤其 rl.close 触发的 close 与按键事件竞争）
+        let settled = false;
 
         const rl = readline.createInterface({
             input: process.stdin,
@@ -83,15 +85,18 @@ export async function customSelect<T>(message: string, choices: Choice<T>[]): Pr
                 selectedIndex = (selectedIndex + 1) % choices.length;
                 render();
             } else if (key && (key.name === 'return' || key.name === 'enter')) {
+                settled = true; // 必须先于 cleanup 置位：cleanup 里的 rl.close() 会触发 close，否则会把回车误判为取消
                 cleanup();
                 resolve(choices[selectedIndex].value);
             } else if (key && key.ctrl && key.name === 'c') {
+                settled = true;
                 cleanup();
                 // 原先此处直接退出进程；现改为抛信号异常，退出码由入口统一决定
                 reject(new CancelError('用户中断选择'));
             } else if (str) {
                 const choice = choices.find((c) => c.key === str.trim());
                 if (choice) {
+                    settled = true;
                     cleanup();
                     resolve(choice.value);
                 }
@@ -121,6 +126,13 @@ export async function customSelect<T>(message: string, choices: Choice<T>[]): Pr
         };
 
         process.stdin.on('keypress', onKeypress);
+        // 管道 EOF 与界面被关闭都要转 CancelError：stdin 非 TTY 时若无此监听，主菜单 Promise 永不 settle
+        rl.on('close', () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(new CancelError('标准输入已结束'));
+        });
         try {
             if (process.stdin.isTTY) {
                 process.stdin.setRawMode(true);
@@ -128,6 +140,7 @@ export async function customSelect<T>(message: string, choices: Choice<T>[]): Pr
             render(); // 首次渲染
         } catch (err) {
             // setRawMode/首次渲染抛错时恢复终端并拒绝 Promise，避免悬置与吞字符
+            settled = true; // 同样先于 cleanup，防止 close 监听抢占为取消错误
             cleanup();
             reject(err);
         }
@@ -167,6 +180,19 @@ export function askQuestion(query: string): Promise<string> {
             resolve(ans.trim());
         });
     });
+}
+
+// 切片行/列数采集：非法值重问而非静默回退，避免负数/全角被折叠成默认值后切错网格
+async function askCount(query: string, fallback: number): Promise<number | 'back'> {
+    while (true) {
+        const t = (await askQuestion(query)).trim();
+        if (t === '0') return 'back'; // 保留原有「输入 0 返回上一步」语义
+        if (t === '') return fallback; // 直接回车取默认值
+        const v = Number(t);
+        // Number 拒绝全角/非数字；上界 512 防止超大值导致切片循环爆炸
+        if (Number.isInteger(v) && v >= 1 && v <= 512) return v;
+        console.log(chalk.red('❌ 无效的输入。请输入 1-512 之间的整数。'));
+    }
 }
 
 // —— 以下为各特效分支的交互采集（自 cli.ts askFormat 内逐块搬迁） ——
@@ -212,13 +238,11 @@ export async function askSplitConfig(): Promise<SplitConfig | 'back'> {
         chalk.cyan.bold('✂️ 请依次输入切片的【列数(X轴)】与【行数(Y轴)】 (若要返回上级菜单，请输入 0 并回车):\n')
     );
 
-    const colStr = await askQuestion(chalk.cyan('  ? 【列数】: 横向有几列表情？(也就是 X 轴，直接回车默认 4): '));
-    if (colStr.trim() === '0') return 'back';
-    const cols = parseInt(colStr, 10) || 4;
+    const cols = await askCount(chalk.cyan('  ? 【列数】: 横向有几列表情？(也就是 X 轴，直接回车默认 4): '), 4);
+    if (cols === 'back') return 'back';
 
-    const rowStr = await askQuestion(chalk.cyan('  ? 【行数】: 纵向有几排表情？(也就是 Y 轴，直接回车默认 4): '));
-    if (rowStr.trim() === '0') return 'back';
-    const rows = parseInt(rowStr, 10) || 4;
+    const rows = await askCount(chalk.cyan('  ? 【行数】: 纵向有几排表情？(也就是 Y 轴，直接回车默认 4): '), 4);
+    if (rows === 'back') return 'back';
 
     renderHeader('主界面 > 图像切片 (2/4) - 导出格式');
     console.log(chalk.cyan.bold(`✔️ 已确认该图包含: 横向 ${cols} 列 × 纵向 ${rows} 排 (行)，将为您精准切割。\n`));
@@ -633,19 +657,36 @@ export async function askTrimCrop(): Promise<TrimCropAnswer> {
             chalk.cyan('📏 请分别输入上、下、左、右四个方向需要向内切除的像素数值 (如果不需要切则输入 0 或直接敲回车):')
         );
 
-        const parseVal = (input: string): number => {
-            const val = parseInt(input, 10);
-            return !isNaN(val) && val > 0 ? val : 0;
+        // 非法输入不再静默按 0 处理：返回 null 表示需重问，否则用户会以为数值已生效
+        const parseVal = (input: string): number | null => {
+            const t = input.trim();
+            if (t === '') return 0;
+            const v = Number(t);
+            return Number.isInteger(v) && v >= 0 ? v : null;
         };
 
-        const tStr = await askQuestion(chalk.gray('  ? 顶部 (Top) 切除像素数: '));
-        const top = parseVal(tStr);
-        const bStr = await askQuestion(chalk.gray('  ? 底部 (Bottom) 切除像素数: '));
-        const bottom = parseVal(bStr);
-        const lStr = await askQuestion(chalk.gray('  ? 左部 (Left) 切除像素数: '));
-        const left = parseVal(lStr);
-        const rStr = await askQuestion(chalk.gray('  ? 右部 (Right) 切除像素数: '));
-        const right = parseVal(rStr);
+        const askEdge = async (label: string): Promise<number> => {
+            while (true) {
+                const input = await askQuestion(chalk.gray(`  ? ${label} 切除像素数: `));
+                const val = parseVal(input);
+                if (val !== null) return val;
+                console.log(chalk.red('❌ 请输入不小于 0 的整数'));
+            }
+        };
+
+        let top = 0;
+        let bottom = 0;
+        let left = 0;
+        let right = 0;
+        // 四边全 0 等于输出原图副本（还记为成功），视为无效输入要求重新采集
+        while (true) {
+            top = await askEdge('顶部 (Top)');
+            bottom = await askEdge('底部 (Bottom)');
+            left = await askEdge('左部 (Left)');
+            right = await askEdge('右部 (Right)');
+            if (top + bottom + left + right > 0) break;
+            console.log(chalk.red('❌ 上/下/左/右不能全为 0，请至少一个方向大于 0。'));
+        }
 
         cropConfig = { top, bottom, left, right };
     }
@@ -740,7 +781,19 @@ export async function askCenterConfig(): Promise<CenterConfig | 'back'> {
     let fillColor = await customSelect(`${chalk.yellow.bold('📦 请选择补白颜色')}:`, fillChoices);
     if (fillColor === 'back') return 'back';
     if (fillColor === 'custom') {
-        fillColor = (await askQuestion(chalk.gray('  ? 请输入十六进制色值码(如 #FF0000): '))) || 'transparent';
+        // 非法色值不能直接交给 sharp，否则会逐文件失败；写进 config 前校验并重问
+        while (true) {
+            const input = (await askQuestion(chalk.gray('  ? 请输入十六进制色值码(如 #FF0000): '))).trim();
+            if (/^#[0-9a-fA-F]{6}$/.test(input)) {
+                fillColor = input;
+                break;
+            }
+            if (input.toLowerCase() === 'transparent') {
+                fillColor = 'transparent';
+                break;
+            }
+            console.log(chalk.red('❌ 无效的颜色。请输入 #RRGGBB 格式（如 #FF0000）或 transparent。'));
+        }
     }
 
     renderHeader('主界面 > 自动居中 (3/3) - 最终输出格式');

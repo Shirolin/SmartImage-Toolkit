@@ -21,9 +21,8 @@ describe('convert 参数边界', () => {
     it('--ai-model 非法值警告并回落 medium', async () => {
         const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
         const missing = path.join(makeTempDir(), 'ghost.png');
-        const summary = await main(['--ai-model', 'large', missing]);
-        // 不存在的路径 → 零产出：failed 仍为 0，但必须带 noInput 让调用方判为非成功
-        expect(summary).toMatchObject({ success: 0, skip: 0, failed: 0, noInput: true });
+        // 不存在的路径 → 零产出：main 直接抛错（退出码 1），而不是返回一个看着像成功的汇总
+        await expect(main(['--ai-model', 'large', missing])).rejects.toThrow('未找到任何受支持的图片文件');
         const warned = logSpy.mock.calls.some((args) =>
             args.some((a) => String(a).includes('large') && String(a).includes('medium'))
         );
@@ -33,7 +32,8 @@ describe('convert 参数边界', () => {
     it('--ai-model 合法值不警告', async () => {
         const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
         const missing = path.join(makeTempDir(), 'ghost.png');
-        await main(['--ai-model', 'small', missing]);
+        // 路径不存在 → 零产出抛错；这里只关心没有出现「未知的 AI 模型」警告
+        await expect(main(['--ai-model', 'small', missing])).rejects.toThrow('未找到任何受支持的图片文件');
         const warned = logSpy.mock.calls.some((args) => args.some((a) => String(a).includes('未知的 AI 模型')));
         expect(warned).toBe(false);
     });
@@ -53,6 +53,16 @@ describe('convert 参数边界', () => {
     it('--format resize 缺配置时抛错并指向交互模式', async () => {
         // 回归：非交互下曾一路走到 core 的 default 分支，报出误导性的「不支持的目标格式」
         await expect(main(['--format', 'resize', 'ghost.png'])).rejects.toThrow('需要缩放参数');
+    });
+
+    it('拼错的选项抛错，不静默按默认格式转换', async () => {
+        // 回归：--fromat 曾被当成文件名忽略，用户要 png 却拿到 webp 且退出码 0
+        await expect(main(['--fromat', 'png', 'ghost.png'])).rejects.toThrow('未知选项');
+    });
+
+    it('选项取值不能是另一个选项', async () => {
+        // 回归：--ai-model --format webp x.png 曾把图片路径当模型档位吞掉，图片被完全忽略
+        await expect(main(['--ai-model', '--format', 'webp', 'ghost.png'])).rejects.toThrow('--ai-model 缺少取值');
     });
 
     it('坏文件只记 error，不中断同批好文件', async () => {

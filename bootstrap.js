@@ -43,8 +43,16 @@ async function main() {
     } else if (await pathExists(srcServerPath)) {
         // 开发模式需要 node_modules 中的 ts-node；缺失时会由子进程报错，此处先给明确提示
         console.log('🛠️ [启动器] 未检测到编译产物，使用 ts-node 开发模式启动（需已安装开发依赖）...');
-        cmd = 'npx';
-        scriptArgs = ['ts-node', '--transpile-only', srcServerPath, ...args];
+        // 与上面的 lib 分支同理：直接用当前运行时执行本地 ts-node 入口。
+        // 写成 'npx' 配 shell:false 在 Windows 上必然 ENOENT（npx 只有 .cmd 垫片，CreateProcess 不认 PATHEXT）
+        cmd = process.execPath;
+        try {
+            scriptArgs = [require.resolve('ts-node/dist/bin.js'), '--transpile-only', srcServerPath, ...args];
+        } catch {
+            console.error('❌ [启动器] 找不到 ts-node：请先执行 npm install（含 devDependencies）或 npm run build。');
+            process['exitCode'] = 1;
+            return;
+        }
     } else {
         console.error(
             '❌ [启动器] 找不到可启动的服务端：lib/server.js 与 src/server.ts 均不存在，请先确认仓库完整或执行构建。'

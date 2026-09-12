@@ -22,8 +22,6 @@ export interface ConvertSummary {
     success: number;
     skip: number;
     failed: number;
-    /** 给了输入却没有任何受支持的图片：零产出的失败，调用方应视作非成功（bat 会据此弹错） */
-    noInput?: boolean;
 }
 
 const KNOWN_FORMATS: readonly TargetFormat[] = [
@@ -73,6 +71,20 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
     let cropConfig: CropConfig | undefined;
     let centerConfig: CenterConfig | undefined;
 
+    // 取值校验必须在摘除任何参数**之前**完成：否则 --ai-model --format webp x.png 里
+    // --format 会先被摘掉，轮到 --ai-model 时它的下一个 token 变成图片路径并被静默吞掉。
+    for (const opt of ['--format', '--ai-model']) {
+        const at = args.indexOf(opt);
+        const value: string | undefined = at === -1 ? undefined : args[at + 1];
+        if (value !== undefined && value.startsWith('-')) {
+            throw new Error(
+                opt === '--format'
+                    ? '❌ --format 缺少取值，请传入 webp/png/avif/mozjpeg 等（可用 --help 查看支持列表）。'
+                    : '❌ --ai-model 缺少取值，请传入 medium 或 small。'
+            );
+        }
+    }
+
     if (args.includes('--interactive')) {
         isInteractive = true;
         for (let i = args.length - 1; i >= 0; i--) {
@@ -82,7 +94,9 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
         const formatIndex = args.indexOf('--format');
         if (formatIndex !== -1) {
             const rawFormat: string | undefined = args[formatIndex + 1];
-            if (rawFormat === undefined) {
+            // 取值不能本身是选项：否则 --format --ai-model small x.png 会把 '--ai-model' 当格式，
+            // 报出误导性的「未知的目标格式」，真正原因是 --format 缺取值
+            if (rawFormat === undefined || rawFormat.startsWith('-')) {
                 throw new Error('❌ --format 缺少取值，请传入 webp/png/avif/mozjpeg 等（可用 --help 查看支持列表）。');
             }
             targetFormat = rawFormat;
@@ -107,7 +121,9 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
         const aiModelIndex = args.indexOf('--ai-model');
         if (aiModelIndex !== -1) {
             const rawModel: string | undefined = args[aiModelIndex + 1];
-            if (rawModel === undefined) {
+            // 同上：否则 --ai-model --format webp x.png 会把图片路径当模型档位吞掉，
+            // 图片被静默忽略、退出码 0，调用方却以为转换成功
+            if (rawModel === undefined || rawModel.startsWith('-')) {
                 throw new Error('❌ --ai-model 缺少取值，请传入 medium 或 small。');
             }
             if (isAiModel(rawModel)) {
@@ -118,6 +134,14 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
                 );
             }
             args.splice(aiModelIndex, 2);
+        }
+    }
+
+    // 剩余 token 只应是路径：拼错的选项不能被当成文件名静默忽略，
+    // 否则会按默认格式产出用户没要的结果（--fromat png 曾静默输出 webp）
+    for (const arg of args) {
+        if (arg.startsWith('-')) {
+            throw new Error(`❌ 未知选项: ${arg}（可用 --help 查看支持列表）。`);
         }
     }
 
@@ -175,6 +199,8 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
         try {
             await fsp.access(arg);
         } catch {
+            // 静默跳过会让用户误以为文件被处理了：至少告诉他哪个路径没进去
+            console.warn(chalk.yellow(`⚠️ 路径不存在或不可访问，已跳过: ${arg}`));
             continue;
         }
         // 着色只在本层做：utils 只返数据，警告经回调在此统一渲染
@@ -193,9 +219,9 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
     allFiles = [...new Set(allFiles)];
 
     if (allFiles.length === 0) {
-        console.log(chalk.red('❌ 未找到任何受支持的图片文件。'));
-        // 用户给了路径却一个可处理的文件都没有：这是零产出的失败，不能被当成成功
-        return { ...idle, noInput: true };
+        // 给了路径却一个可处理的文件都没有：这是零产出的失败。
+        // 走异常而非返回值，既不改 ConvertSummary 的既有形状，又能让退出码如实反映失败。
+        throw new Error('❌ 未找到任何受支持的图片文件。');
     }
 
     console.log(
@@ -258,7 +284,9 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
                         status: splitRes.status,
                         file: splitRes.file,
                         reason: splitRes.reason,
-                        generatedCount: splitRes.generatedFiles.length
+                        generatedCount: splitRes.generatedFiles.length,
+                        // 切片的部分失败也要带上来：否则少写的那几片既无提示也不进退出码
+                        failedTileCount: splitRes.failedTiles?.length ?? 0
                     };
                 } else if (format === 'resize' && resizeConfig) {
                     const resizeOut = resizeConfig.outputFormat;
@@ -306,6 +334,16 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
                 if (res.status === 'success') {
                     if ('generatedCount' in res && typeof res.generatedCount === 'number') {
                         successCount += res.generatedCount; // 切片模式下增加的是碎片总数
+                        // 部分分片失败不能吞：进汇总、进日志、进退出码，用户才知道切图不完整
+                        const failedTiles =
+                            'failedTileCount' in res && typeof res.failedTileCount === 'number'
+                                ? res.failedTileCount
+                                : 0;
+                        if (failedTiles > 0) {
+                            errorLogs.push(
+                                `[${new Date().toLocaleString()}] 文件: ${res.file} | 错误: ${failedTiles} 张切片未写出`
+                            );
+                        }
                     } else {
                         successCount++;
                     }
@@ -365,11 +403,12 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
     return { success: successCount, skip: skipCount, failed: errorLogs.length };
 }
 
-// 顶层只做两件事：跑 main；把「有失败项 / 零产出」翻译成非零退出码，
+// 顶层只做两件事：跑 main；把「有失败项」翻译成非零退出码，
 // 让 run.bat 这类调用方能把失败当失败处理——此前整批失败仍退出 0，脚本会误报成功。
+// 零产出（无参数/无匹配图片/用户取消）走异常或正常返回，不在这里特判。
 main(process.argv.slice(2))
     .then((summary) => {
-        if (summary.failed > 0 || summary.noInput) process.exitCode = 1;
+        if (summary.failed > 0) process.exitCode = 1;
     })
     .catch((err: unknown) => {
         console.error(err instanceof Error ? err.message : err);
