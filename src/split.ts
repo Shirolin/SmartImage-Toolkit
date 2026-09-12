@@ -90,7 +90,9 @@ export async function splitImage(
 
     try {
         // 源图只读一次：解码得 buffer 并复用 info 尺寸，后续切片全走内存 buffer
-        const { data: srcBuffer, info: srcInfo } = await sharp(filePath).toBuffer({ resolveWithObject: true });
+        // rotate() 无参时按 EXIF Orientation 自动摆正：手机竖拍图（orientation 5~8）必须先摆正，
+        // 否则 info 宽高仍是横躺的原始尺寸，网格切割线会整体错位
+        const { data: srcBuffer, info: srcInfo } = await sharp(filePath).rotate().toBuffer({ resolveWithObject: true });
         const width = srcInfo.width || 0;
         const height = srcInfo.height || 0;
 

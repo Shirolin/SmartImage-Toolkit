@@ -5,6 +5,7 @@ import { promises as fsp } from 'fs';
 import { TrimConfig, CropConfig } from './cli';
 import type { OpResult } from './shared/results';
 import { ensureDir, allocateFilePath } from './shared/output-naming';
+import { orientedSize } from './shared/orientation';
 import { applyEncoding } from './shared/encode';
 import { normalizeExt } from './shared/formats';
 
@@ -45,11 +46,15 @@ export async function processTrimOrCrop(
 
     try {
         // 元数据只读一次，trim/crop 分支复用
-        const metadata = await sharp(filePath).metadata();
-        const originalW = metadata.width || 0;
-        const originalH = metadata.height || 0;
+        // metadata() 返回未旋转的原始宽高，orientation 5~8 需互换；
+        // 后续 trim 偏移量与 crop 裁剪框都在摆正后的坐标系里，故用摆正尺寸
+        const oriented = await orientedSize(filePath);
+        const originalW = oriented.width;
+        const originalH = oriented.height;
 
-        let sharpInstance = sharp(filePath);
+        // rotate() 无参时按 EXIF Orientation 自动摆正，必须在 extract 之前应用，
+        // 否则裁剪坐标与摆正后的探测结果不一致
+        let sharpInstance = sharp(filePath).rotate();
 
         // 关键逻辑分支：trim vs crop（重载签名保证配对，in 守卫再收窄）
         if (action === 'trim') {
@@ -60,7 +65,8 @@ export async function processTrimOrCrop(
 
             // --- 智能边向选择探底方案 ---
             // 隐式测试：仅在内存中执行全方位 Trim 看能切出什么边界
-            const testProbe = sharp(filePath).trim({ threshold: trimCfg.threshold });
+            // 探测必须与最终流水线同样先 rotate()，否则 trimOffset 基于未摆正坐标系，extract 会整体错位
+            const testProbe = sharp(filePath).rotate().trim({ threshold: trimCfg.threshold });
             const { info: probeInfo } = await testProbe.toBuffer({ resolveWithObject: true });
 
             // 仅当确实发生切除行为（尺寸变化）才进入后续运算，否则按原图保存

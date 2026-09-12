@@ -3,6 +3,7 @@ import path from 'path';
 import { promises as fsp } from 'fs';
 
 import { normalizeExt, equalExt } from './shared/formats';
+import { orientedSize } from './shared/orientation';
 import { applyEncoding } from './shared/encode';
 import { allocateFilePath } from './shared/output-naming';
 import type { OpResult } from './shared/results';
@@ -41,13 +42,15 @@ export async function resizeImage(
     let outputPath: string | undefined;
 
     try {
-        const metadata = await sharp(filePath).metadata();
+        // metadata() 返回未旋转的原始宽高，orientation 5~8 需互换；
+        // 这里统一用摆正后尺寸参与目标尺寸计算与跳过判定
+        const oriented = await orientedSize(filePath);
         let targetWidth: number | undefined = undefined;
         let targetHeight: number | undefined = undefined;
         // 默认值对齐 CLI 菜单标注的「Cover (默认)」：直接调用方不传 fit 时也按 cover 裁剪填满，而非 inside 留边
         const resizeFit = options.fit || 'cover';
 
-        if (!metadata.width || !metadata.height) {
+        if (!oriented.width || !oriented.height) {
             return { status: 'error', file: filePath, reason: '无法读取图片元数据(宽高)' };
         }
 
@@ -55,14 +58,14 @@ export async function resizeImage(
             case 'by_width':
                 if (!options.width) return { status: 'error', file: filePath, reason: '按宽度缩放缺少宽度参数' };
                 targetWidth = Math.round(options.width);
-                if (targetWidth === metadata.width && (!normalizedFormat || equalExt(normalizedFormat, ext))) {
+                if (targetWidth === oriented.width && (!normalizedFormat || equalExt(normalizedFormat, ext))) {
                     return { status: 'skipped', file: filePath, reason: '由于宽度未变化且未要求格式转换，已跳过' };
                 }
                 break;
             case 'by_height':
                 if (!options.height) return { status: 'error', file: filePath, reason: '按高度缩放缺少高度参数' };
                 targetHeight = Math.round(options.height);
-                if (targetHeight === metadata.height && (!normalizedFormat || equalExt(normalizedFormat, ext))) {
+                if (targetHeight === oriented.height && (!normalizedFormat || equalExt(normalizedFormat, ext))) {
                     return { status: 'skipped', file: filePath, reason: '由于高度未变化且未要求格式转换，已跳过' };
                 }
                 break;
@@ -73,7 +76,7 @@ export async function resizeImage(
                 if (options.percent === 100 && (!normalizedFormat || equalExt(normalizedFormat, ext))) {
                     return { status: 'skipped', file: filePath, reason: '比例为100%且未要求格式转换，已跳过' };
                 }
-                targetWidth = Math.round(metadata.width * (options.percent / 100));
+                targetWidth = Math.round(oriented.width * (options.percent / 100));
                 // 为了防止四舍五入后变为 0
                 if (targetWidth < 1) targetWidth = 1;
                 break;
@@ -83,8 +86,8 @@ export async function resizeImage(
                 targetWidth = Math.round(options.width);
                 targetHeight = Math.round(options.height);
                 if (
-                    targetWidth === metadata.width &&
-                    targetHeight === metadata.height &&
+                    targetWidth === oriented.width &&
+                    targetHeight === oriented.height &&
                     (!normalizedFormat || equalExt(normalizedFormat, ext))
                 ) {
                     return { status: 'skipped', file: filePath, reason: '宽高均未变化且未要求格式转换，已跳过' };
@@ -94,7 +97,9 @@ export async function resizeImage(
                 return { status: 'error', file: filePath, reason: '不支持的缩放模式' };
         }
 
-        let sharpInstance = sharp(filePath);
+        // rotate() 无参时按 EXIF Orientation 自动摆正，且必须在 resize 之前应用，
+        // 保证目标宽高作用在摆正后的坐标系上（orientation 为 1/undefined 时是 no-op）
+        let sharpInstance = sharp(filePath).rotate();
 
         // 如果是 custom 模式，需要传入 fit 参数。否则 sharp 默认按比例缩放（高度或者宽度适应）
         if (options.mode === 'custom') {

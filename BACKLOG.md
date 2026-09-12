@@ -13,9 +13,10 @@
 
 ## 高
 
+本轮无（四个算子缺 EXIF 方向已在同轮修复并验证，故不登记）。
+
 | 文件:行 | 问题 | 影响 | 建议 |
 | --- | --- | --- | --- |
-| `src/resize.ts:97`；`src/trim.ts:52,63`；`src/center.ts:32,39,91`；`src/split.ts:93` | 四个算子仍以 `sharp(filePath)` 直接解码，未应用 EXIF Orientation——本轮 `.rotate()` 只修了 core.ts 转换链路，全仓 grep 仅 core.ts 命中（RevOps#6，已验证） | 手机竖拍（orientation=6/8）JPEG 经任一算子处理，输出既未旋转也无方向标签，成品躺倒；且 resize 的「尺寸未变则 skip」比较、center 的 originalW/H、split 的网格都基于未旋转像素 | 在各算子解码处统一加 `.rotate()`（含 trim/center 的探测路径与 split 的源图解码），旋转口径必须一致，否则 center bbox 与 split 网格会错位 |
 
 ## 中
 

@@ -5,6 +5,7 @@ import { promises as fsp } from 'fs';
 import { CenterConfig } from './cli';
 import type { OpResult } from './shared/results';
 import { ensureDir, allocateFilePath } from './shared/output-naming';
+import { orientedSize } from './shared/orientation';
 import { applyEncoding } from './shared/encode';
 import { normalizeExt } from './shared/formats';
 
@@ -29,14 +30,16 @@ export async function processCenter(
     const outputPath = await allocateFilePath(outDir, name, actualExt);
 
     try {
-        const originalImage = sharp(filePath);
-        const metadata = await originalImage.metadata();
-        const originalW = metadata.width || 0;
-        const originalH = metadata.height || 0;
+        // metadata 的宽高不含 EXIF 旋转，orientation 5~8 需互换；
+        // 居中边距与内容尺寸都在摆正后的坐标系里，故这里取摆正尺寸
+        const oriented = await orientedSize(filePath);
+        const originalW = oriented.width;
+        const originalH = oriented.height;
 
         // 1. 探测主体内容 (Bounding Box)
         // 我们利用 trim() 的探测能力来寻找主体，但要在内存中拿到结果
-        const probe = sharp(filePath).trim({ threshold: config.threshold });
+        // 先 rotate() 摆正，探测出的偏移量才与后续 extract 处于同一坐标系
+        const probe = sharp(filePath).rotate().trim({ threshold: config.threshold });
         const { info: probeInfo } = await probe.toBuffer({ resolveWithObject: true });
 
         // probeInfo.trimOffsetLeft 和 trimOffsetTop 是负值，代表左侧和顶部被切掉的像素
@@ -88,7 +91,9 @@ export async function processCenter(
         }
 
         // 4. 构建处理流水线
+        // 与探测保持一致：先 rotate() 摆正，再按摆正坐标系 extract/extend
         let pipeline = sharp(filePath)
+            .rotate()
             .extract({
                 left: contentLeft,
                 top: contentTop,
