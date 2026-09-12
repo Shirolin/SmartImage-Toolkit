@@ -22,7 +22,8 @@ describe('convert 参数边界', () => {
         const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
         const missing = path.join(makeTempDir(), 'ghost.png');
         const summary = await main(['--ai-model', 'large', missing]);
-        expect(summary).toEqual({ success: 0, skip: 0, failed: 0 });
+        // 不存在的路径 → 零产出：failed 仍为 0，但必须带 noInput 让调用方判为非成功
+        expect(summary).toMatchObject({ success: 0, skip: 0, failed: 0, noInput: true });
         const warned = logSpy.mock.calls.some((args) =>
             args.some((a) => String(a).includes('large') && String(a).includes('medium'))
         );
@@ -47,6 +48,11 @@ describe('convert 参数边界', () => {
 
     it('--ai-model 缺值抛错', async () => {
         await expect(main(['--ai-model'])).rejects.toThrow('缺少');
+    });
+
+    it('--format resize 缺配置时抛错并指向交互模式', async () => {
+        // 回归：非交互下曾一路走到 core 的 default 分支，报出误导性的「不支持的目标格式」
+        await expect(main(['--format', 'resize', 'ghost.png'])).rejects.toThrow('需要缩放参数');
     });
 
     it('坏文件只记 error，不中断同批好文件', async () => {

@@ -22,6 +22,8 @@ export interface ConvertSummary {
     success: number;
     skip: number;
     failed: number;
+    /** 给了输入却没有任何受支持的图片：零产出的失败，调用方应视作非成功（bat 会据此弹错） */
+    noInput?: boolean;
 }
 
 const KNOWN_FORMATS: readonly TargetFormat[] = [
@@ -150,6 +152,21 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
     }
     const format: TargetFormat = targetFormat;
 
+    // split/resize/crop 的产出完全由参数决定：非交互模式拿不到配置就无从开工。
+    // 在这里早失败并指出替代入口，避免落到 core 的 default 分支、
+    // 报出误导性的「不支持的目标格式」让用户以为是格式本身不受支持。
+    if (format === 'split' && !splitConfig) {
+        throw new Error('❌ --format split 需要切割参数：请使用 --interactive（或 run_interactive.bat）选择切割方式。');
+    }
+    if (format === 'resize' && !resizeConfig) {
+        throw new Error(
+            '❌ --format resize 需要缩放参数：请使用 --interactive（或 run_interactive.bat）选择缩放方式。'
+        );
+    }
+    if (format === 'crop' && !cropConfig) {
+        throw new Error('❌ --format crop 需要裁剪参数：请使用 --interactive（或 run_interactive.bat）指定裁剪区域。');
+    }
+
     console.log(chalk.cyan('\n====================================================================================='));
     console.log(chalk.yellow('🔍 正在检索系统文件，如果文件较多可能需要一点时间...'));
     console.log(chalk.cyan('=====================================================================================\n'));
@@ -177,7 +194,8 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
 
     if (allFiles.length === 0) {
         console.log(chalk.red('❌ 未找到任何受支持的图片文件。'));
-        return idle;
+        // 用户给了路径却一个可处理的文件都没有：这是零产出的失败，不能被当成成功
+        return { ...idle, noInput: true };
     }
 
     console.log(
@@ -300,7 +318,12 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
             spinner.text = chalk.blue(`🚀 [流水线] 正在提速处理... (${currentProgress}/${allFiles.length})`);
         }
 
-        spinner.succeed(chalk.green.bold(`✨ 魔法完成！所有图片均已通过极速引擎处理完毕。`));
+        // 结束语必须与结果一致：整批失败时还喊「魔法完成」，脚本与用户都会误判成功
+        if (errorLogs.length > 0) {
+            spinner.fail(chalk.red.bold(`⚠️ 处理结束: ${errorLogs.length} 个文件失败，详见下方汇总与日志。`));
+        } else {
+            spinner.succeed(chalk.green.bold(`✨ 魔法完成！所有图片均已通过极速引擎处理完毕。`));
+        }
         processingDone = true;
     } finally {
         // 批处理抛未捕获异常时仍停转，避免终端 spinner 残留
@@ -342,8 +365,13 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
     return { success: successCount, skip: skipCount, failed: errorLogs.length };
 }
 
-// 顶层只做一件事：跑 main，异常决定进程退出码（本 catch 为全仓唯一允许的退出点）
-main(process.argv.slice(2)).catch((err: unknown) => {
-    console.error(err instanceof Error ? err.message : err);
-    process.exit(1);
-});
+// 顶层只做两件事：跑 main；把「有失败项 / 零产出」翻译成非零退出码，
+// 让 run.bat 这类调用方能把失败当失败处理——此前整批失败仍退出 0，脚本会误报成功。
+main(process.argv.slice(2))
+    .then((summary) => {
+        if (summary.failed > 0 || summary.noInput) process.exitCode = 1;
+    })
+    .catch((err: unknown) => {
+        console.error(err instanceof Error ? err.message : err);
+        process.exit(1);
+    });
