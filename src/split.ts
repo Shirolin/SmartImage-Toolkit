@@ -1,11 +1,11 @@
 import sharp from 'sharp';
 import path from 'path';
-import { writeFile } from 'fs/promises';
+import { writeFile, rm } from 'fs/promises';
 
 import type { SplitResult } from './shared/results';
 import { allocateDir } from './shared/output-naming';
 import { applyEncoding } from './shared/encode';
-import { SPLIT_TRIM_THRESHOLD } from './shared/constants';
+import { SPLIT_TRIM_THRESHOLD, MAX_TILES, BATCH_SIZE } from './shared/constants';
 
 // 兼容旧名：统一复用共享结果类型
 export type { SplitResult };
@@ -39,6 +39,54 @@ export async function splitImage(
     const generatedFiles: string[] = [];
     // 非切片产物（排查标尺图、split_config.json）：不计入 success 计数与后处理
     const artifacts: string[] = [];
+    // 输出目录外置声明：catch 需据此清理失败留下的空目录
+    let outDir: string | undefined;
+
+    // 入口参数校验：必须在建目录/解码前拦下非法 rows/cols 或切割线，
+    // 否则双层循环 0 次会产出空切片却仍报 success（见缺陷 1）
+    const useCustomCuts =
+        Array.isArray(options.cutX) &&
+        Array.isArray(options.cutY) &&
+        options.cutX.length >= 2 &&
+        options.cutY.length >= 2;
+    const hasAnyCustomCuts = Array.isArray(options.cutX) || Array.isArray(options.cutY);
+    if (hasAnyCustomCuts) {
+        if (!useCustomCuts) {
+            return {
+                status: 'error',
+                file: filePath,
+                reason: '自定义切割线非法：cutX/cutY 需同时提供，且各自至少包含 2 个坐标点',
+                generatedFiles: [],
+                artifacts: []
+            };
+        }
+    } else if (
+        !Number.isInteger(options.rows) ||
+        options.rows < 1 ||
+        !Number.isInteger(options.cols) ||
+        options.cols < 1
+    ) {
+        return {
+            status: 'error',
+            file: filePath,
+            reason: `行列数非法：rows/cols 必须为不小于 1 的整数(当前 rows=${options.rows}, cols=${options.cols})`,
+            generatedFiles: [],
+            artifacts: []
+        };
+    }
+
+    const totalRows = useCustomCuts ? options.cutY!.length - 1 : options.rows;
+    const totalCols = useCustomCuts ? options.cutX!.length - 1 : options.cols;
+    // 总量上限与服务端 /api/split-custom 同口径（MAX_TILES），避免超大任务把内存打爆（见缺陷 4）
+    if (totalRows * totalCols > MAX_TILES) {
+        return {
+            status: 'error',
+            file: filePath,
+            reason: `切片总数超限：最多 ${MAX_TILES} 张(当前 ${totalRows * totalCols} 张)`,
+            generatedFiles: [],
+            artifacts: []
+        };
+    }
 
     try {
         // 源图只读一次：解码得 buffer 并复用 info 尺寸，后续切片全走内存 buffer
@@ -59,7 +107,7 @@ export async function splitImage(
         const offsetTop = 0;
 
         // 输出目录按 name(1) 递增独占分配，杜绝并发命名竞争
-        const outDir = await allocateDir(path.join(dir, name));
+        outDir = await allocateDir(path.join(dir, name));
 
         // 单片失败记账：只记不断整批
         const failedTiles: Array<{ row: number; col: number; reason: string }> = [];
@@ -72,13 +120,6 @@ export async function splitImage(
                 <rect x="${escapeXml(offsetLeft)}" y="${escapeXml(offsetTop)}" width="${escapeXml(contentWidth)}" height="${escapeXml(contentHeight)}" fill="none" stroke="red" stroke-width="4"/>`;
         }
 
-        const useCustomCuts =
-            Array.isArray(options.cutX) &&
-            Array.isArray(options.cutY) &&
-            options.cutX.length >= 2 &&
-            options.cutY.length >= 2;
-        const totalRows = useCustomCuts ? options.cutY!.length - 1 : options.rows;
-        const totalCols = useCustomCuts ? options.cutX!.length - 1 : options.cols;
         // 分片失败携带坐标的错误类型（供 allSettled 后归因记账）
         class TileError extends Error {
             constructor(
@@ -90,7 +131,23 @@ export async function splitImage(
             }
         }
 
-        const tileJobs: Array<Promise<string>> = [];
+        // 分批并发：每批最多 BATCH_SIZE 个切片任务，批内 settle 后再建下一批，
+        // 避免一次性为全部格子建管道导致内存打爆（见缺陷 4）
+        let tileBatch: Array<Promise<string>> = [];
+        // 先落盘后记账：toFile 成功才 push，失败记 failedTiles 继续跑
+        const settleBatch = async (): Promise<void> => {
+            if (tileBatch.length === 0) return;
+            const settlements = await Promise.allSettled(tileBatch);
+            for (const settlement of settlements) {
+                if (settlement.status === 'fulfilled') {
+                    generatedFiles.push(settlement.value);
+                } else {
+                    const tileErr = settlement.reason as TileError;
+                    failedTiles.push({ row: tileErr.row, col: tileErr.col, reason: tileErr.message });
+                }
+            }
+            tileBatch = [];
+        };
 
         for (let row = 0; row < totalRows; row++) {
             for (let col = 0; col < totalCols; col++) {
@@ -231,28 +288,29 @@ export async function splitImage(
                     }
                 })();
 
-                tileJobs.push(tileJob);
+                tileBatch.push(tileJob);
+                // 批满即 settle，控制同时在跑的 sharp 管道数量
+                if (tileBatch.length >= BATCH_SIZE) {
+                    await settleBatch();
+                }
             }
         }
 
-        // 先落盘后记账：toFile 成功才 push，失败记 failedTiles 继续跑
-        const settlements = await Promise.allSettled(tileJobs);
-        for (const settlement of settlements) {
-            if (settlement.status === 'fulfilled') {
-                generatedFiles.push(settlement.value);
-            } else {
-                const tileErr = settlement.reason as TileError;
-                failedTiles.push({ row: tileErr.row, col: tileErr.col, reason: tileErr.message });
-            }
-        }
+        // 收尾：settle 最后不足一批的任务
+        await settleBatch();
 
-        // 整批全失败才 error（成功数为零且确实有分片任务）；部分失败仍 success 但带失败分项
-        if (totalRows * totalCols > 0 && generatedFiles.length === 0) {
+        // 整批失败或零切片必然 error（成功数为零即失败）；部分失败仍 success 但带失败分项
+        if (totalRows * totalCols <= 0 || generatedFiles.length === 0) {
+            // 零产出：删除刚分配的空输出目录，反复失败不再堆积 name(1)/name(2)（见缺陷 3）
+            await rm(outDir, { recursive: true, force: true }).catch(() => {});
             const summary = failedTiles.map((t) => `r${t.row + 1}c${t.col + 1}:${t.reason}`).join('；');
             return {
                 status: 'error',
                 file: filePath,
-                reason: `全部分片失败(${failedTiles.length}片): ${summary}`,
+                reason:
+                    failedTiles.length > 0
+                        ? `全部分片失败(${failedTiles.length}片): ${summary}`
+                        : '未生成任何切片：切割线或网格参数未产生有效切片',
                 generatedFiles: [],
                 artifacts,
                 failedTiles
@@ -277,22 +335,29 @@ export async function splitImage(
         }
 
         // 保存用户切割配置（含失败记账，供排查）
+        // best-effort：切片已落盘，配置写入失败只告警，绝不把整批降级为 error（见缺陷 2）
         const configPath = path.join(outDir, 'split_config.json');
-        await writeFile(
-            configPath,
-            JSON.stringify(
-                {
-                    source: filePath,
-                    options: options,
-                    failedTiles,
-                    trimFallbacks
-                },
-                null,
-                2
-            ),
-            'utf-8'
-        );
-        artifacts.push(configPath);
+        try {
+            await writeFile(
+                configPath,
+                JSON.stringify(
+                    {
+                        source: filePath,
+                        options: options,
+                        failedTiles,
+                        trimFallbacks
+                    },
+                    null,
+                    2
+                ),
+                'utf-8'
+            );
+            artifacts.push(configPath);
+        } catch (configErr: unknown) {
+            console.warn(
+                `[split] 切割配置写入失败，已跳过: ${configErr instanceof Error ? configErr.message : String(configErr)}`
+            );
+        }
 
         return {
             status: 'success',
@@ -302,6 +367,10 @@ export async function splitImage(
             ...(failedTiles.length > 0 ? { failedTiles } : {})
         };
     } catch (error: unknown) {
+        // 兜底清理：无任何切片成功时删掉刚分配的输出目录（见缺陷 3）
+        if (outDir && generatedFiles.length === 0) {
+            await rm(outDir, { recursive: true, force: true }).catch(() => {});
+        }
         let errorDetails = '';
         if (error instanceof Error) {
             errorDetails = error.message;

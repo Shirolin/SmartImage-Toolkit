@@ -44,7 +44,8 @@ export async function resizeImage(
         const metadata = await sharp(filePath).metadata();
         let targetWidth: number | undefined = undefined;
         let targetHeight: number | undefined = undefined;
-        const resizeFit = options.fit || 'inside';
+        // 默认值对齐 CLI 菜单标注的「Cover (默认)」：直接调用方不传 fit 时也按 cover 裁剪填满，而非 inside 留边
+        const resizeFit = options.fit || 'cover';
 
         if (!metadata.width || !metadata.height) {
             return { status: 'error', file: filePath, reason: '无法读取图片元数据(宽高)' };
