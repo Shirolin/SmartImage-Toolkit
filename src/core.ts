@@ -3,6 +3,7 @@ import path from 'path';
 import url from 'url';
 import chalk from 'chalk';
 import { promises as fsp } from 'fs';
+import { Blob as NodeBlob } from 'buffer';
 import { removeBackground } from '@imgly/background-removal-node';
 
 import type { TargetFormat, AiModel } from './cli';
@@ -70,6 +71,19 @@ export async function convertImage(
             let finalBuffer: Buffer | null = null;
 
             try {
+                // AI 抠图链路（本仓与 @imgly 内部）依赖 Web 标准全局：Node 18+ 才同时提供 fetch/Blob。
+                // 被裁剪过的运行时或受第三方全局补丁影响的会话可能只剩 fetch 而丢了 Blob，
+                // 此时用 node:buffer 的等价实现补回；两者都缺则直接给可操作的版本提示，
+                // 不让 "Blob is not defined" 这类晦涩 ReferenceError 冒到用户面前。
+                if (typeof globalThis.fetch !== 'function') {
+                    throw new Error(
+                        `当前运行时 ${process.version} 缺少全局 fetch，AI 抠图需要 Node 18 及以上，请升级 Node 后重试`
+                    );
+                }
+                if (typeof globalThis.Blob === 'undefined') {
+                    Reflect.set(globalThis, 'Blob', NodeBlob);
+                }
+
                 if (spinnerInstance) {
                     spinnerInstance.text = chalk.blue(`[AI 引擎就绪] 正在读取并准备提取: ${name}`);
                     spinnerInstance.render();

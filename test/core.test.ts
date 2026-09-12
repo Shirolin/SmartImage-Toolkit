@@ -7,6 +7,7 @@ import sharp from 'sharp';
 vi.mock('@imgly/background-removal-node', () => ({ removeBackground: vi.fn() }));
 
 import { convertImage } from '../src/core';
+import { removeBackground } from '@imgly/background-removal-node';
 import { makeTempDir, createPng } from './helpers';
 
 describe('convertImage', () => {
@@ -59,5 +60,27 @@ describe('convertImage', () => {
         expect(result.reason).toBeTruthy();
         // 占位无残留：同名 .webp 幽灵空文件必须被清理
         expect(fs.existsSync(path.join(dir, 'ghost.webp'))).toBe(false);
+    });
+
+    // 回归：抠图链路（本仓构造的 Blob 与 @imgly 内部）曾隐式依赖全局 Blob，
+    // 在缺该全局的运行时上整条链路只剩 "AI 处理异常: Blob is not defined"
+    it('全局 Blob 缺失时抠图仍成功（用 buffer 实现补齐）', async () => {
+        const dir = makeTempDir();
+        const src = path.join(dir, 'cutout.png');
+        await createPng(src, 24, 24);
+
+        // 4 通道 raw 结果与 core 的解析约定一致（width*height*4）
+        const fakeResult = new Blob([new Uint8Array(24 * 24 * 4)], { type: 'image/x-rgba8' });
+        vi.mocked(removeBackground).mockResolvedValue(fakeResult);
+
+        const original = globalThis.Blob;
+        Reflect.deleteProperty(globalThis, 'Blob');
+        try {
+            const result = await convertImage(src, 'rmbg_solid', null, 'small');
+            expect(result).toEqual({ status: 'success', file: src });
+            expect(fs.existsSync(path.join(dir, 'cutout_nobg.png'))).toBe(true);
+        } finally {
+            Reflect.set(globalThis, 'Blob', original);
+        }
     });
 });
