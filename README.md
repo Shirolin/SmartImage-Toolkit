@@ -116,6 +116,10 @@ Web UI 依赖编译产物，请先执行 `npm run build` 再启动。
 **Q：AI 抠图首次运行很慢？**
 首次使用时需要加载模型文件，之后会复用本地缓存；对速度敏感可选择 `Small (极速)` 模型。
 
+**Q：AI 抠图报 `Blob is not defined`，或提示缺少全局 `fetch`？**
+抠图链路依赖 Node 18+ 才提供的 Web 标准全局（`Blob`/`fetch`）。有些工具（IDE、微信开发者工具等）会把自己携带的老 `node.exe` 写进 PATH，其优先级可能高于你安装的 Node——双击脚本时会命中那个老版本。
+`run.bat` / `run_interactive.bat` 会自动跳过 PATH 中的旧 Node、优先挑选 18 及以上的版本；若机器上确实没有，请安装 Node 18+ 或把正确版本排到 PATH 前面。
+
 ## 📄 许可证及致谢
 
 - 依赖库支持：[Sharp](https://github.com/lovell/sharp)、[imgly/background-removal-node](https://github.com/imgly/background-removal-node)
