@@ -4,7 +4,11 @@ rem cmd.exe mis-reads "::" comment lines that contain non-ASCII text while the c
 rem code page is 65001: it drops the "::" prefix and runs the rest of the line as a command
 rem (symptom: "'xxx' is not recognized as an internal or external command").
 rem Accepts every dragged / "Send to" argument (several images at once).
-setlocal enabledelayedexpansion
+rem No delayed expansion here on purpose: nothing in this file needs !var!, and turning it on
+rem would eat "!" characters out of the dragged paths expanded through %~1 (a lone "!" is
+rem dropped, a pair is treated as a variable and expands to nothing), so bootstrap.js would
+rem receive a rewritten path and show an empty page.
+setlocal
 
 cd /d "%~dp0"
 

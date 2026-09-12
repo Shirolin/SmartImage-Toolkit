@@ -52,19 +52,36 @@ if exist "lib\convert.js" (
     call "%CD%\node_modules\.bin\ts-node.cmd" src\convert.ts --interactive %*
 )
 
-if %errorlevel% neq 0 goto :RUN_ERROR
+rem Exit codes agreed with the CLI: 0 = success, 2 = cancelled by the user, any other value
+rem = failure. This read must stay on a line of its own: %errorlevel% inside a parenthesized
+rem block is expanded when the whole block is parsed, so the fresh value would be missed.
+set "RC=%errorlevel%"
+if "%RC%"=="0" goto :RUN_DONE
+if "%RC%"=="2" goto :RUN_CANCELLED
+goto :RUN_ERROR
 
+:RUN_DONE
 rem Success: keep the window up briefly before closing.
 echo.
 echo Done. This window closes in 5 seconds...
 timeout /t 5 >nul
-exit /b
+exit /b 0
+
+:RUN_CANCELLED
+rem Stopping on purpose is a normal outcome (partial output may already exist): report it
+rem plainly, never show the success line and never raise the error dialog.
+echo.
+echo Session cancelled. This window closes in 5 seconds...
+timeout /t 5 >nul
+exit /b 2
 
 :RUN_ERROR
-echo [error] The engine reported a failure. See the messages above for the reason.
-powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('The engine hit an unexpected error. Check the console log for details.', 'SmartImage-Toolkit error', 'OK', 'Error')"
+echo [error] Processing did not complete. See the messages above for the reason.
+rem Neutral wording on purpose: a couple of failed files or a folder with nothing to convert
+rem are expected outcomes of a batch run, so this must not read like an unexpected crash.
+powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Processing did not complete. Some files may have been skipped. Check the console log for details.', 'SmartImage-Toolkit', 'OK', 'Warning')"
 pause
-exit /b
+exit /b 1
 
 :MISSING_NODE
 echo [error] Node.js was not found on PATH. Please install Node 18 or newer.
