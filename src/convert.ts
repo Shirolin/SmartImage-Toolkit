@@ -11,17 +11,18 @@ import { splitImage } from './split';
 import { resizeImage } from './resize';
 import { processTrimOrCrop } from './trim';
 import { processCenter } from './center';
-import { BATCH_SIZE } from './shared/constants';
+import { BATCH_SIZE, EXIT_CANCEL } from './shared/constants';
 import { resolveImageExt } from './shared/formats';
 
 // 第一性原理：入口只做三件事——解析参数、收集文件、分批调度；
-// 顶层不再执行副作用，导出 main(argv) 供测试与复用，进程退出码由最外层 catch 唯一决定。
+// 顶层不再执行副作用，导出 main(argv) 供测试与复用，进程退出码由 require.main 守卫内的入口统一翻译。
 
-/** main 的纯结果汇总（成功数 / 跳过数 / 失败数） */
+/** main 的纯结果汇总（成功数 / 跳过数 / 失败数）；canceled 为真表示用户主动取消，与「零产出」是两种语义 */
 export interface ConvertSummary {
     success: number;
     skip: number;
     failed: number;
+    canceled?: boolean;
 }
 
 const KNOWN_FORMATS: readonly TargetFormat[] = [
@@ -161,10 +162,11 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
             if (resolution.cropConfig) cropConfig = resolution.cropConfig;
             if (resolution.centerConfig) centerConfig = resolution.centerConfig;
         } catch (err: unknown) {
-            // 用户取消：友好提示后按“零产出”正常返回，退出码由外层保持为 0
+            // 用户取消：与「无参数/零产出」的 idle 不同语义，标记 canceled 由入口翻译成 EXIT_CANCEL，
+            // 让 bat/脚本能区分「完成」与「取消」（此前两者都是退出码 0，故会出现「操作已取消」与 Done 同屏）
             if (err instanceof CancelError) {
                 console.log(chalk.red('👋 操作已取消。'));
-                return idle;
+                return { ...idle, canceled: true };
             }
             throw err;
         }
@@ -195,6 +197,9 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
     console.log(chalk.yellow('🔍 正在检索系统文件，如果文件较多可能需要一点时间...'));
     console.log(chalk.cyan('=====================================================================================\n'));
     let allFiles: string[] = [];
+    // 被深度限制截断的文件数：utils 只报一次数字，这里累计后计入 skip 汇总，
+    // 否则整层未处理的产出缺口会被「成功 0 / 失败 0 / 退出码 0」掩盖
+    let truncatedCount = 0;
     for (const arg of args) {
         try {
             await fsp.access(arg);
@@ -210,6 +215,7 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
             } else if (warn.kind === 'symlink') {
                 console.warn(chalk.yellow(`⚠️ [链接跳过] 检测到软链接，为防止死循环已跳过: ${warn.path}`));
             } else {
+                if (typeof warn.skippedFiles === 'number') truncatedCount += warn.skippedFiles;
                 console.warn(chalk.yellow(`⚠️ [深度限制] ${warn.message}: ${warn.path}`));
             }
         });
@@ -368,10 +374,13 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
         if (!processingDone) spinner.stop();
     }
 
+    // 深度截断的文件并入 skip：它们确实存在于输入中、只是未参与处理，汇总必须如实反映
+    skipCount += truncatedCount;
+
     console.log(chalk.gray('━'.repeat(85)));
     console.log(`  ${chalk.green('✅ 成功转换:')} ${chalk.green.bold(successCount)} 个`);
     console.log(
-        `  ${chalk.yellow('⏩ 智能跳过:')} ${chalk.yellow.bold(skipCount)} 个 ${chalk.gray('(格式本身符合目标，无需二次渲染)')}`
+        `  ${chalk.yellow('⏩ 智能跳过:')} ${chalk.yellow.bold(skipCount)} 个 ${chalk.gray('(格式本身符合目标或超出深度限制，未做二次渲染)')}`
     );
     console.log(`  ${chalk.red('❌ 转换失败:')} ${chalk.red.bold(errorLogs.length)} 个`);
     console.log(chalk.gray('━'.repeat(85)));
@@ -403,14 +412,21 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
     return { success: successCount, skip: skipCount, failed: errorLogs.length };
 }
 
-// 顶层只做两件事：跑 main；把「有失败项」翻译成非零退出码，
-// 让 run.bat 这类调用方能把失败当失败处理——此前整批失败仍退出 0，脚本会误报成功。
-// 零产出（无参数/无匹配图片/用户取消）走异常或正常返回，不在这里特判。
-main(process.argv.slice(2))
-    .then((summary) => {
-        if (summary.failed > 0) process.exitCode = 1;
-    })
-    .catch((err: unknown) => {
-        console.error(err instanceof Error ? err.message : err);
-        process.exit(1);
-    });
+// 顶层只做两件事：跑 main；把汇总翻译成退出码（用户取消 EXIT_CANCEL / 有失败项 1）。
+// require.main 守卫与 server.ts 既有约定一致：被单测或其它模块 import 时不执行 CLI，
+// 也不把退出码写进宿主进程（vitest import 不再污染输出、不再以退出码 1 终止）。
+if (require.main === module) {
+    main(process.argv.slice(2))
+        .then((summary) => {
+            if (summary.canceled) {
+                process.exitCode = EXIT_CANCEL;
+            } else if (summary.failed > 0) {
+                process.exitCode = 1;
+            }
+        })
+        .catch((err: unknown) => {
+            console.error(err instanceof Error ? err.message : err);
+            // 收敛为 exitCode：import 该模块的宿主进程不应被强制终止
+            process.exitCode = 1;
+        });
+}

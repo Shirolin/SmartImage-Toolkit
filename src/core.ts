@@ -27,6 +27,12 @@ function isBlobLike(value: unknown): value is Blob {
 }
 
 /**
+ * AI 链路内已构造完整用户文案的错误标记：外层 catch 凭类型判断是否还需要加 `AI 处理异常:` 前缀，
+ * 不再靠 `includes('图片文件解析失败')` 这类文案匹配（改文案即退化成双前缀）。
+ */
+class AiPipelineError extends Error {}
+
+/**
  * 图像处理核心网关引擎
  */
 export async function convertImage(
@@ -70,7 +76,6 @@ export async function convertImage(
             outputExt = equalExt(ext, '.webp') ? resolveImageExt('webp', ext) : resolveImageExt('png', ext);
             suffix = '_nobg';
             let normalizedBuffer: Buffer | null = null;
-            let finalBuffer: Buffer | null = null;
 
             try {
                 // AI 抠图链路（本仓与 @imgly 内部）依赖 Web 标准全局：Node 18+ 才同时提供 fetch/Blob。
@@ -99,7 +104,7 @@ export async function convertImage(
                     if (sharpErr instanceof Error) {
                         errMsg = sharpErr.message;
                     }
-                    throw new Error(`图片文件解析失败 (文件可能已损坏或不支持此处理): ${errMsg}`);
+                    throw new AiPipelineError(`图片文件解析失败 (文件可能已损坏或不支持此处理): ${errMsg}`);
                 }
 
                 // 全局 Blob 即 DOM 标准类型，直接满足 removeBackground 入参
@@ -185,19 +190,20 @@ export async function convertImage(
                         ? resultSharp.png({ compressionLevel: 9, effort: 8, palette: false })
                         : applyEncoding(resultSharp, outputExt);
 
-                finalBuffer = await resultSharp.toBuffer();
-                sharpInstance = sharp(finalBuffer);
+                // 直接把编码管线交给后续 toFile 落盘：此前的 toBuffer() + sharp(finalBuffer) 会
+                // 让同一张图多一次完整编解码，且 finally 里的 finalBuffer = null 并不能提前释放内存
+                sharpInstance = resultSharp;
             } catch (err: unknown) {
                 // 非 Error 抛出（native 层、自定义 polyfill 常见）也要留下可见原因，不能只剩空串
                 const errorDetails = err instanceof Error ? err.message : String(err) || '未知错误';
                 return {
                     status: 'error',
                     file: filePath,
-                    reason: errorDetails.includes('图片文件解析失败') ? errorDetails : `AI 处理异常: ${errorDetails}`
+                    // 内层已构造完整用户文案时按类型放行，不再二次加前缀（与文案解耦）
+                    reason: err instanceof AiPipelineError ? errorDetails : `AI 处理异常: ${errorDetails}`
                 };
             } finally {
                 normalizedBuffer = null;
-                finalBuffer = null;
             }
             break;
         }
