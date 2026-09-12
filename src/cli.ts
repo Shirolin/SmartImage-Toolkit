@@ -104,6 +104,7 @@ export async function askFormat(): Promise<InteractiveResolution> {
         }
     ];
 
+    // 子流程返回 'back' 一律 continue 回主菜单并丢弃已填参数（子菜单 0 号项的文案已如实说明，勿改成「上一步」）
     while (true) {
         renderHeader('主界面');
         const selectedFormat = await customSelect(message, formatChoices);

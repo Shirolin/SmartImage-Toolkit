@@ -1,5 +1,6 @@
 import readline from 'readline';
 import chalk from 'chalk';
+import { MAX_DIM, MAX_PERCENT } from './shared/constants';
 import { CancelError } from './config-types';
 import type { AiModel, SplitConfig, ResizeConfig, TrimConfig, CropConfig, CenterConfig } from './config-types';
 
@@ -24,6 +25,8 @@ export function renderHeader(breadcrumb: string): void {
 }
 
 export async function customSelect<T>(message: string, choices: Choice<T>[]): Promise<T> {
+    // 菜单独占 stdin：先释放 askQuestion 的共享 reader，否则它会一并消费按键（回显 + 排入缓冲行）
+    releaseQuestionReader();
     return new Promise<T>((resolve, reject) => {
         let selectedIndex = 0;
         let renderedLines = 0;
@@ -147,38 +150,123 @@ export async function customSelect<T>(message: string, choices: Choice<T>[]): Pr
     });
 }
 
-// 供简易输入使用的辅助函数（自 cli.ts 逐行搬迁）
-// Ctrl+C / EOF 与菜单一致转 CancelError，不直接杀进程，由入口统一决定退出码
-export function askQuestion(query: string): Promise<string> {
+// —— 简易输入的会话级 readline ——
+// 逐问新建/关闭 readline 会丢弃同一 stdin chunk 内已缓冲的后续行：管道预写「alpha\nbeta」时，
+// 第二问只能等到 EOF 而变成 CancelError。故改为会话内共享惰性单例：reader 持续读取，
+// 尚未被提问认领的行先入队，由后续提问按序消费；EOF 依旧转 CancelError，不悬置 Promise。
+
+interface LineWaiter {
+    deliver: (line: string) => void;
+    fail: (err: Error) => void;
+}
+
+let questionReader: readline.Interface | null = null;
+const bufferedLines: string[] = []; // 已到达但尚无提问认领的行
+const lineWaiters: LineWaiter[] = []; // 已提问、等待下一行的调用方
+
+/**
+ * 释放共享 reader：菜单要独占 stdin（raw 模式 + 按键），reader 继续挂着会回显并吞掉菜单按键；
+ * 残留的缓冲行也一并丢弃，避免串到下一次提问。
+ * 因此每个交互流程的最后一步都是 customSelect（见 cli.ts），结束时不会留下 stdin 引用。
+ */
+function releaseQuestionReader(): void {
+    const rl = questionReader;
+    questionReader = null;
+    if (rl) {
+        try {
+            rl.close();
+        } catch {
+            // 关闭失败可忽略
+        }
+    }
+    bufferedLines.length = 0;
+    // 提问是串行的，正常不会有人在途；万一有也不能让 Promise 悬置
+    for (const waiter of lineWaiters.splice(0)) {
+        waiter.fail(new CancelError('用户中断输入'));
+    }
+}
+
+function getQuestionReader(): readline.Interface {
+    if (questionReader) return questionReader;
+
     const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout
     });
+
+    rl.on('line', (line: string) => {
+        const waiter = lineWaiters.shift();
+        if (waiter) {
+            waiter.deliver(line);
+        } else {
+            bufferedLines.push(line);
+        }
+    });
+
+    // 管道 EOF / 界面关闭：先把已缓冲的行交给在途提问，其余按取消处理
+    rl.on('close', () => {
+        if (questionReader === rl) questionReader = null;
+        for (const waiter of lineWaiters.splice(0)) {
+            const buffered = bufferedLines.shift();
+            if (buffered === undefined) {
+                waiter.fail(new CancelError('用户中断输入'));
+            } else {
+                waiter.deliver(buffered);
+            }
+        }
+    });
+
+    questionReader = rl;
+    return rl;
+}
+
+// 供简易输入使用的辅助函数（自 cli.ts 逐行搬迁）
+// Ctrl+C / EOF 与菜单一致转 CancelError，不直接杀进程，由入口统一决定退出码
+export function askQuestion(query: string): Promise<string> {
+    const rl = getQuestionReader();
+    rl.setPrompt(query);
+    rl.prompt(); // 问题文本交给 readline 输出，TTY 下同时负责回显与行编辑
+
+    // 同一 chunk 内预写的答案已入队，直接按序取用
+    const buffered = bufferedLines.shift();
+    if (buffered !== undefined) {
+        return Promise.resolve(buffered.trim());
+    }
+
     return new Promise<string>((resolve, reject) => {
         let settled = false;
-        const cancel = (): void => {
-            if (settled) return;
-            settled = true;
-            try {
-                rl.close();
-            } catch {
-                // 关闭失败可忽略
+
+        function detach(): void {
+            const index = lineWaiters.indexOf(waiter);
+            if (index >= 0) lineWaiters.splice(index, 1);
+            rl.removeListener('SIGINT', onSigint);
+        }
+
+        const waiter: LineWaiter = {
+            deliver: (line: string) => {
+                if (settled) return;
+                settled = true;
+                detach();
+                resolve(line.trim());
+            },
+            fail: (err: Error) => {
+                if (settled) return;
+                settled = true;
+                detach();
+                reject(err);
             }
-            reject(new CancelError('用户中断输入'));
         };
-        rl.on('SIGINT', cancel);
-        // 管道 EOF/界面关闭同样视为取消，避免 Promise 永久悬置
-        rl.on('close', cancel);
-        rl.question(query, (ans) => {
+
+        // Ctrl+C 与菜单一致转 CancelError；提问结束即摘除监听，避免在单例上累积
+        function onSigint(): void {
             if (settled) return;
             settled = true;
-            try {
-                rl.close();
-            } catch {
-                // 关闭失败可忽略
-            }
-            resolve(ans.trim());
-        });
+            detach();
+            reject(new CancelError('用户中断输入'));
+        }
+
+        rl.on('SIGINT', onSigint);
+        lineWaiters.push(waiter);
     });
 }
 
@@ -186,7 +274,7 @@ export function askQuestion(query: string): Promise<string> {
 async function askCount(query: string, fallback: number): Promise<number | 'back'> {
     while (true) {
         const t = (await askQuestion(query)).trim();
-        if (t === '0') return 'back'; // 保留原有「输入 0 返回上一步」语义
+        if (t === '0') return 'back'; // 保留原有「输入 0 返回主菜单」语义
         if (t === '') return fallback; // 直接回车取默认值
         const v = Number(t);
         // Number 拒绝全角/非数字；上界 512 防止超大值导致切片循环爆炸
@@ -233,7 +321,7 @@ export async function askAiModel(): Promise<AiModel | 'back'> {
 
 /** 图像切片全流程采集 */
 export async function askSplitConfig(): Promise<SplitConfig | 'back'> {
-    renderHeader('主界面 > 图像切片 (1/4) - 阵列范围');
+    renderHeader('主界面 > 图像切片 (第 1 步) - 阵列范围');
     console.log(
         chalk.cyan.bold('✂️ 请依次输入切片的【列数(X轴)】与【行数(Y轴)】 (若要返回上级菜单，请输入 0 并回车):\n')
     );
@@ -244,7 +332,7 @@ export async function askSplitConfig(): Promise<SplitConfig | 'back'> {
     const rows = await askCount(chalk.cyan('  ? 【行数】: 纵向有几排表情？(也就是 Y 轴，直接回车默认 4): '), 4);
     if (rows === 'back') return 'back';
 
-    renderHeader('主界面 > 图像切片 (2/4) - 导出格式');
+    renderHeader('主界面 > 图像切片 (第 2 步) - 导出格式');
     console.log(chalk.cyan.bold(`✔️ 已确认该图包含: 横向 ${cols} 列 × 纵向 ${rows} 排 (行)，将为您精准切割。\n`));
 
     const formatMessage = `${chalk.cyan.bold('📦 请选择切片文件的最终导出格式')}:\n${chalk.gray('  ? 导出格式:')}`;
@@ -260,8 +348,8 @@ export async function askSplitConfig(): Promise<SplitConfig | 'back'> {
         },
         {
             key: '0',
-            title: '返回上一级   ',
-            description: '返回重填切割数值',
+            title: '返回主菜单',
+            description: '已填参数将丢弃',
             value: 'back',
             titleColor: chalk.gray
         }
@@ -269,7 +357,7 @@ export async function askSplitConfig(): Promise<SplitConfig | 'back'> {
     const exportFormat = await customSelect(formatMessage, formatChoices2);
     if (exportFormat === 'back') return 'back';
 
-    renderHeader('主界面 > 图像切片 (3/4) - 智能居中设定');
+    renderHeader('主界面 > 图像切片 (第 3 步) - 智能居中设定');
     const centerMessage = `${chalk.cyan.bold('🎯 是否对切片进行智能居中？')}:\n${chalk.gray('  ? 居中模式:')}`;
     const centerChoices: Choice<'none' | 'keep_ratio' | 'square' | 'back'>[] = [
         {
@@ -295,8 +383,8 @@ export async function askSplitConfig(): Promise<SplitConfig | 'back'> {
         },
         {
             key: '0',
-            title: '返回上一级',
-            description: '重新选择导出格式',
+            title: '返回主菜单',
+            description: '已填参数将丢弃',
             value: 'back',
             titleColor: chalk.gray
         }
@@ -306,10 +394,10 @@ export async function askSplitConfig(): Promise<SplitConfig | 'back'> {
 
     let edgeShave = 0;
     if (centerMode !== 'none') {
-        renderHeader('主界面 > 图像切片 (4/4) - 边缘去噪保护');
+        renderHeader('主界面 > 图像切片 (第 4 步) - 边缘去噪保护');
         console.log(chalk.cyan.bold('🔪 是否需要向内收缩切片边缘？\n'));
         const shaveMessage = chalk.gray('? 边缘去噪保护:');
-        const shaveChoices: Choice<number>[] = [
+        const shaveChoices: Choice<number | 'back'>[] = [
             {
                 key: '1',
                 title: '不收缩 (默认)',
@@ -330,9 +418,17 @@ export async function askSplitConfig(): Promise<SplitConfig | 'back'> {
                 description: '切到邻居图案时加大此值',
                 value: -1,
                 titleColor: chalk.red.bold
+            },
+            {
+                key: '0',
+                title: '返回主菜单',
+                description: '已填参数将丢弃',
+                value: 'back',
+                titleColor: chalk.gray
             }
         ];
         const shaveChoice = await customSelect(shaveMessage, shaveChoices);
+        if (shaveChoice === 'back') return 'back';
 
         if (shaveChoice === -1) {
             let validPad = false;
@@ -355,10 +451,11 @@ export async function askSplitConfig(): Promise<SplitConfig | 'back'> {
 
     let debugGrid = false;
     // 因为生成参照图很有用，所以独立于中心居中作为最后一步提问
-    renderHeader(`主界面 > 图像切片 (${centerMode !== 'none' ? '5/5' : '4/4'}) - 辅助诊断模式`);
+    // 边缘去噪那一步仅在开启居中时出现，分母会随路径变化，故这里改用「第 N 步」
+    renderHeader(`主界面 > 图像切片 (第 ${centerMode !== 'none' ? 5 : 4} 步) - 辅助诊断模式`);
     console.log(chalk.cyan.bold('🩺 是否额外生成一张切割对齐参考图？\n'));
     const debugMessage = chalk.gray('? 附带生成辅助对齐网格:');
-    const debugChoices: Choice<boolean>[] = [
+    const debugChoices: Choice<boolean | 'back'>[] = [
         {
             key: '1',
             title: '不需要 (默认)',
@@ -372,9 +469,18 @@ export async function askSplitConfig(): Promise<SplitConfig | 'back'> {
             description: '排查切割是否对齐',
             value: true,
             titleColor: chalk.yellow.bold
+        },
+        {
+            key: '0',
+            title: '返回主菜单',
+            description: '已填参数将丢弃',
+            value: 'back',
+            titleColor: chalk.gray
         }
     ];
-    debugGrid = await customSelect(debugMessage, debugChoices);
+    const debugGridChoice = await customSelect(debugMessage, debugChoices);
+    if (debugGridChoice === 'back') return 'back';
+    debugGrid = debugGridChoice;
 
     console.clear();
     return { rows, cols, exportFormat, centerMode, edgeShave, debugGrid };
@@ -433,21 +539,22 @@ export async function askResizeConfig(): Promise<ResizeConfig | 'back'> {
         while (true) {
             const ans = await askQuestion(chalk.cyan('  ? 【目标宽度】: 请输入想要缩放到的宽度像素值(例如 800): '));
             const val = parseInt(ans, 10);
-            if (!isNaN(val) && val > 0) {
+            // 上界与算子层一致（resize.ts 同样拒绝超过 MAX_DIM 的目标），避免超大树被拒或拖垮进程
+            if (!isNaN(val) && val > 0 && val <= MAX_DIM) {
                 resizeConfig.width = val;
                 break;
             }
-            console.log(chalk.red('❌ 无效的输入。请输入大于 0 的数字。'));
+            console.log(chalk.red(`❌ 无效的输入。请输入 1-${MAX_DIM} 之间的整数。`));
         }
     } else if (resizeMode === 'by_height') {
         while (true) {
             const ans = await askQuestion(chalk.cyan('  ? 【目标高度】: 请输入想要缩放到的高度像素值(例如 600): '));
             const val = parseInt(ans, 10);
-            if (!isNaN(val) && val > 0) {
+            if (!isNaN(val) && val > 0 && val <= MAX_DIM) {
                 resizeConfig.height = val;
                 break;
             }
-            console.log(chalk.red('❌ 无效的输入。请输入大于 0 的数字。'));
+            console.log(chalk.red(`❌ 无效的输入。请输入 1-${MAX_DIM} 之间的整数。`));
         }
     } else if (resizeMode === 'by_percent') {
         while (true) {
@@ -455,35 +562,35 @@ export async function askResizeConfig(): Promise<ResizeConfig | 'back'> {
                 chalk.cyan('  ? 【缩放百分比】: 请输入百分比数值 (例如 50 代表缩小到一半, 200 代表放大两倍): ')
             );
             const val = parseInt(ans, 10);
-            if (!isNaN(val) && val > 0) {
+            if (!isNaN(val) && val > 0 && val <= MAX_PERCENT) {
                 resizeConfig.percent = val;
                 break;
             }
-            console.log(chalk.red('❌ 无效的输入。请输入大于 0 的数字。'));
+            console.log(chalk.red(`❌ 无效的输入。请输入 1-${MAX_PERCENT} 之间的整数。`));
         }
     } else if (resizeMode === 'custom') {
         while (true) {
             const ansW = await askQuestion(chalk.cyan('  ? 【目标宽度】: 请输入宽度像素值: '));
             const valW = parseInt(ansW, 10);
-            if (!isNaN(valW) && valW > 0) {
+            if (!isNaN(valW) && valW > 0 && valW <= MAX_DIM) {
                 resizeConfig.width = valW;
                 break;
             }
-            console.log(chalk.red('❌ 无效的输入。请输入大于 0 的数字。'));
+            console.log(chalk.red(`❌ 无效的输入。请输入 1-${MAX_DIM} 之间的整数。`));
         }
         while (true) {
             const ansH = await askQuestion(chalk.cyan('  ? 【目标高度】: 请输入高度像素值: '));
             const valH = parseInt(ansH, 10);
-            if (!isNaN(valH) && valH > 0) {
+            if (!isNaN(valH) && valH > 0 && valH <= MAX_DIM) {
                 resizeConfig.height = valH;
                 break;
             }
-            console.log(chalk.red('❌ 无效的输入。请输入大于 0 的数字。'));
+            console.log(chalk.red(`❌ 无效的输入。请输入 1-${MAX_DIM} 之间的整数。`));
         }
 
         console.log();
         const fitMessage = `${chalk.blue.bold('📏 对于不匹配的宽高比例，请选择适配策略')}:\n${chalk.gray('  ? 适配策略:')}`;
-        const fitChoices: Choice<'cover' | 'contain' | 'fill' | 'inside'>[] = [
+        const fitChoices: Choice<'cover' | 'contain' | 'fill' | 'inside' | 'back'>[] = [
             {
                 key: '1',
                 title: 'Cover (默认)',
@@ -511,9 +618,18 @@ export async function askResizeConfig(): Promise<ResizeConfig | 'back'> {
                 description: '保留比例但决不超出，类似按最大边缩放',
                 value: 'inside',
                 titleColor: chalk.white
+            },
+            {
+                key: '0',
+                title: '返回主菜单',
+                description: '已填参数将丢弃',
+                value: 'back',
+                titleColor: chalk.gray
             }
         ];
-        resizeConfig.fit = await customSelect(fitMessage, fitChoices);
+        const fit = await customSelect(fitMessage, fitChoices);
+        if (fit === 'back') return 'back';
+        resizeConfig.fit = fit;
     }
 
     renderHeader('主界面 > 批量缩放 (3/3) - 最终输出格式');
@@ -537,8 +653,8 @@ export async function askResizeConfig(): Promise<ResizeConfig | 'back'> {
         },
         {
             key: '0',
-            title: '返回重新填写参数',
-            description: '返回修改缩放参数',
+            title: '返回主菜单',
+            description: '已填缩放参数将丢弃',
             value: 'back',
             titleColor: chalk.gray
         }
@@ -558,7 +674,7 @@ export type TrimCropAnswer =
 
 /** 边缘修剪（智能去边 / 手动裁剪）全流程采集 */
 export async function askTrimCrop(): Promise<TrimCropAnswer> {
-    renderHeader('主界面 > 边缘修剪 (1/3) - 修剪模式');
+    renderHeader('主界面 > 边缘修剪 (第 1 步) - 修剪模式');
     const trimModeMessage = `${chalk.yellow.bold('✂️ 请选择边缘修剪方式')}:\n${chalk.gray('  ? 修剪模式:')}`;
     const trimModeChoices: Choice<'auto' | 'manual' | 'back'>[] = [
         {
@@ -591,7 +707,7 @@ export async function askTrimCrop(): Promise<TrimCropAnswer> {
     let trimConfig: TrimConfig | undefined;
 
     if (trimMode === 'auto') {
-        renderHeader('主界面 > 边缘修剪 (2/4) - 边向筛选');
+        renderHeader('主界面 > 边缘修剪 (第 2 步) - 边向筛选');
 
         const sidesMessage = `${chalk.cyan.bold('🧠 【智能去边】请选择需要自动裁切的边 (支持多向联合)')}:\n${chalk.gray('  ? 修剪方向:')}`;
         const sidesChoices: Choice<('top' | 'bottom' | 'left' | 'right')[] | 'back'>[] = [
@@ -623,13 +739,13 @@ export async function askTrimCrop(): Promise<TrimCropAnswer> {
                 value: ['left', 'right'],
                 titleColor: chalk.white
             },
-            { key: '0', title: '返回重新选模式', description: '', value: 'back', titleColor: chalk.gray }
+            { key: '0', title: '返回主菜单', description: '已填参数将丢弃', value: 'back', titleColor: chalk.gray }
         ];
 
         const sides = await customSelect(sidesMessage, sidesChoices);
         if (sides === 'back') return 'back';
 
-        renderHeader('主界面 > 边缘修剪 (3/4) - 容差设定');
+        renderHeader('主界面 > 边缘修剪 (第 3 步) - 容差设定');
         console.log(chalk.cyan('🧠 【智能去边】将基于图片边缘颜色(包含全透或纯白)向内试探...'));
 
         let validThreshold = false;
@@ -652,7 +768,7 @@ export async function askTrimCrop(): Promise<TrimCropAnswer> {
         }
         trimConfig = { threshold, sides };
     } else {
-        renderHeader('主界面 > 边缘修剪 (2/3) - 裁剪边界');
+        renderHeader('主界面 > 边缘修剪 (第 2 步) - 裁剪边界');
         console.log(
             chalk.cyan('📏 请分别输入上、下、左、右四个方向需要向内切除的像素数值 (如果不需要切则输入 0 或直接敲回车):')
         );
@@ -692,7 +808,8 @@ export async function askTrimCrop(): Promise<TrimCropAnswer> {
     }
 
     // 最后导出格式
-    renderHeader(`主界面 > 边缘修剪 (${trimMode === 'auto' ? '4/4' : '3/3'}) - 最终输出格式`);
+    // 手动裁剪比智能去边少一步，分母会随路径变化，故同样用「第 N 步」
+    renderHeader(`主界面 > 边缘修剪 (第 ${trimMode === 'auto' ? 4 : 3} 步) - 最终输出格式`);
     const formatMessage = `${chalk.yellow.bold('📦 请选择修剪后文件的最终导出格式')}:\n${chalk.gray('  ? 导出格式:')}`;
     const formatChoices4: Choice<'original' | 'webp' | 'png' | 'mozjpeg' | 'back'>[] = [
         {
@@ -711,7 +828,7 @@ export async function askTrimCrop(): Promise<TrimCropAnswer> {
             value: 'mozjpeg',
             titleColor: chalk.green.bold
         },
-        { key: '0', title: '返回重新选择', description: '', value: 'back', titleColor: chalk.gray }
+        { key: '0', title: '返回主菜单', description: '已填参数将丢弃', value: 'back', titleColor: chalk.gray }
     ];
 
     const outFormat = await customSelect(formatMessage, formatChoices4);
@@ -775,7 +892,7 @@ export async function askCenterConfig(): Promise<CenterConfig | 'back'> {
             value: 'custom',
             titleColor: chalk.blue
         },
-        { key: '0', title: '上一步', description: '', value: 'back', titleColor: chalk.gray }
+        { key: '0', title: '返回主菜单', description: '已填参数将丢弃', value: 'back', titleColor: chalk.gray }
     ];
 
     let fillColor = await customSelect(`${chalk.yellow.bold('📦 请选择补白颜色')}:`, fillChoices);
@@ -826,7 +943,7 @@ export async function askCenterConfig(): Promise<CenterConfig | 'back'> {
             value: 'mozjpeg',
             titleColor: chalk.red
         },
-        { key: '0', title: '上一步', description: '', value: 'back', titleColor: chalk.gray }
+        { key: '0', title: '返回主菜单', description: '已填参数将丢弃', value: 'back', titleColor: chalk.gray }
     ];
     const finalFormatChoice = await customSelect(`${chalk.yellow.bold('📦 请选择最终导出格式')}:`, formatChoicesCenter);
     if (finalFormatChoice === 'back') return 'back';
