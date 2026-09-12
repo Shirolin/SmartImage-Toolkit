@@ -36,7 +36,9 @@ async function main() {
     let scriptArgs;
     if (await pathExists(libServerPath)) {
         console.log('⚡ [启动器] 使用已编译产物极速启动...');
-        cmd = 'node';
+        // 用当前进程的 node 起子进程：若写死 'node'，子进程会重新按 PATH 解析，
+        // 可能落到另一个（例如第三方工具自带的过老）运行时上，与父进程不一致。
+        cmd = process.execPath;
         scriptArgs = [libServerPath, ...args];
     } else if (await pathExists(srcServerPath)) {
         // 开发模式需要 node_modules 中的 ts-node；缺失时会由子进程报错，此处先给明确提示

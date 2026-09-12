@@ -4,15 +4,18 @@ rem Silence mode con: it fails noisily on consoles that cannot be resized.
 mode con cols=85 lines=25 >nul 2>nul
 color 0f
 echo =====================================================================================
-echo    🎨 SmartImage-Toolkit (交互模式版)
+echo    SmartImage-Toolkit - interactive mode
 echo =====================================================================================
 echo.
-echo ⚙️ [启动] 正在检查运行环境并启动引擎...
+echo [start] Checking the runtime and starting the engine...
 
-rem IMPORTANT: keep every comment in this file ASCII-only and start it with "rem".
-rem cmd.exe mis-reads "::" comment lines that contain non-ASCII text while the console
-rem code page is 65001: it drops the "::" prefix and runs the rest of the line as a command
-rem (symptom: "'xxx' is not recognized as an internal or external command").
+rem IMPORTANT - keep this file pure ASCII, comments included.
+rem Under code page 65001 cmd.exe mis-parses lines whose multi-byte characters land across
+rem its internal read buffer: it drops part of the line or runs the rest as a command
+rem (symptom: "'xxx' is not recognized as an internal or external command", occasionally the
+rem window just closes before anything can be read). All Chinese UI text is printed by the
+rem Node side, which handles UTF-8 correctly - never echo it from here.
+
 rem Prefer the bundled portable runtime (bin\node.exe). Otherwise pick the first node on PATH
 rem that is Node 18 or newer: IDE bundles and tool vendors (WeChat devtools, ...) ship ancient
 rem node.exe files that shadow the real one, and those lack the Web globals (Blob/fetch) the
@@ -28,13 +31,12 @@ if not defined NODE_EXE set "NODE_EXE=%FALLBACK_NODE%"
 if not defined NODE_EXE goto :MISSING_NODE
 
 :NODE_READY
-
 cd /d "%~dp0"
 
 rem Install dependencies on first run.
 if exist "node_modules\" goto :RUN_NODE
 
-echo 📦 [安装] 首次运行，正在自动配置必要组件，请稍候...
+echo [setup] First run: installing dependencies, please wait...
 call npm install --silent
 if %errorlevel% neq 0 goto :NPM_FAILED
 
@@ -54,25 +56,25 @@ if %errorlevel% neq 0 goto :RUN_ERROR
 
 rem Success: keep the window up briefly before closing.
 echo.
-echo ✅ [就绪] 流程结束！窗口将在 5 秒后优雅地自动关闭...
+echo Done. This window closes in 5 seconds...
 timeout /t 5 >nul
 exit /b
 
 :RUN_ERROR
-echo ❌ [失败] 程序运行出错。
-powershell -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('抱歉，转换过程中发生了未料到的引擎错误。请检查控制台日志获取更多信息。', 'SmartImage-Toolkit 运行错误', 'OK', 'Error')"
+echo [error] The engine reported a failure. See the messages above for the reason.
+powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('The engine hit an unexpected error. Check the console log for details.', 'SmartImage-Toolkit error', 'OK', 'Error')"
 pause
 exit /b
 
 :MISSING_NODE
-echo ⚠️ [警告] 未检测到 Node.js，请先安装。
-powershell -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('缺少核心环境 (Node.js)。`n`n运行本程序需要安装 Node.js。点击确定将为您自动打开官方下载页面，请下载长期维护版 (LTS)。', '环境缺失', 'OK', 'Warning')"
+echo [error] Node.js was not found on PATH. Please install Node 18 or newer.
+powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Node.js is required but was not found. Click OK to open the official download page, then install the LTS build.', 'Missing environment', 'OK', 'Warning')"
 start https://nodejs.org/
 exit /b
 
 :NPM_FAILED
-echo ❌ [错误] 依赖组件安装失败，请检查网络连接或更换 npm 源后重试。
-powershell -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('首次运行安装必要组件失败！`n`n请检查您的网络连接、代理或尝试更换 npm 源后再试。', '初始化失败', 'OK', 'Error')"
+echo [error] Dependency installation failed. Check your network or npm registry and retry.
+powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('Installing the required components failed. Check your network, proxy or npm registry and retry.', 'Setup failed', 'OK', 'Error')"
 pause
 exit /b
 
