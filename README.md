@@ -29,6 +29,7 @@
 ## 📦 环境要求
 
 - [Node.js](https://nodejs.org/) **20 LTS 或更高**（声明于 `package.json` 的 `engines` 字段）
+- 仓库根 `.nvmrc` 固定到 `22.20.0`：vfox / nvm / fnm 进入目录后会自动切到该版本（AI 抠图依赖 Node 18+ 的 `Blob`/`fetch`，详见「常见问题」）
 - Windows 10/11（右键菜单集成与打包脚本依赖 PowerShell）
 
 ## 🚀 快速开始
