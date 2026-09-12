@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import { promises as fsp } from 'fs';
+import { promises as fsp, realpathSync } from 'fs';
 import { execFile } from 'child_process';
 import { splitImage } from './split';
 import { processCenter } from './center';
@@ -79,17 +79,38 @@ function getAllowedRoots(): string[] {
     return roots;
 }
 
+/**
+ * 取路径的物理真实路径：展开符号链接与 Windows junction（`mklink /J`）到最终目标。
+ * 路径不存在（如尚未落盘的切片）或不可访问时退回 path.resolve —— 路由随后还会 stat/sendFile，
+ * 不存在的路径最终以 404 收场，不会因为这次退回而放行链接指向的外部目标。
+ */
+function realpathOrResolve(p: string): string {
+    try {
+        return realpathSync(p);
+    } catch {
+        return path.resolve(p);
+    }
+}
+
+/** 白名单根 realpath 结果缓存：根集合稳定，每个根规范化一次后复用，避免每次请求都打文件系统 */
+const rootRealpathCache = new Map<string, string>();
+
 /** 路径是否落在白名单根内（含根自身），供单测与路由共用 */
 export function isPathAllowed(p: string, roots: string[]): boolean {
+    // 先取物理路径再比较：白名单目录内的 junction/symlink 可指向根外，纯字符串前缀比较会误放行
+    const real = realpathOrResolve(p);
     // Windows 路径大小写不敏感：从别处粘贴来的路径不应因大小写差异被拒
-    const norm = (s: string): string => {
-        const resolved = path.resolve(s);
-        return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-    };
-    const resolved = norm(p);
+    const resolved = process.platform === 'win32' ? real.toLowerCase() : real;
     return roots.some((root) => {
-        const base = norm(root);
-        return resolved === base || resolved.startsWith(base + path.sep);
+        let base = rootRealpathCache.get(root);
+        if (base === undefined) {
+            base = realpathOrResolve(root);
+            rootRealpathCache.set(root, base);
+        }
+        const prefix = process.platform === 'win32' ? base.toLowerCase() : base;
+        // 根自身即「盘符根」时其末尾已带分隔符，补一次会拼出 `d:\\` 而漏掉所有子文件
+        const childPrefix = prefix.endsWith(path.sep) ? prefix : prefix + path.sep;
+        return resolved === prefix || resolved.startsWith(childPrefix);
     });
 }
 

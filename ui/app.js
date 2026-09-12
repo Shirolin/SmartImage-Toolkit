@@ -1,52 +1,54 @@
-const canvas = document.getElementById('editorCanvas');
-const ctx = canvas ? canvas.getContext('2d') : null;
-const imgPathInput = document.getElementById('imgPathInput');
-const loadBtn = document.getElementById('loadBtn');
-const splitBtn = document.getElementById('splitBtn');
-const exitBtn = document.getElementById('exitBtn');
-const statusMsg = document.getElementById('statusMsg');
+// 统一元素获取：取空时报错并返回 null，由使用点判空后跳过对应分支。
+// 顶层对空元素取属性/挂监听会抛 TypeError 并中断整个脚本（余下按钮全部失灵），故全文件只用这一种取法。
+function mustGet(id) {
+    const el = document.getElementById(id);
+    if (!el) console.error(`[UI] 缺少元素 #${id}，相关功能不可用`);
+    return el;
+}
 
-// 关键元素空守卫：模板缺失 id 时尽早给出明确报错，避免后续空指针难以排查
-if (!canvas || !ctx) {
-    console.error('[UI] 缺少画布元素 #editorCanvas，编辑器无法初始化');
-}
-if (!imgPathInput || !loadBtn || !splitBtn || !exitBtn || !statusMsg) {
-    console.error('[UI] 缺少关键表单元素，图片加载/切图/退出流程可能不可用');
-}
+const canvas = mustGet('editorCanvas');
+const ctx = canvas ? canvas.getContext('2d') : null; // 2d 上下文取不到时由 draw() 判空退出
+const imgPathInput = mustGet('imgPathInput');
+const loadBtn = mustGet('loadBtn');
+const splitBtn = mustGet('splitBtn');
+const exitBtn = mustGet('exitBtn');
+const statusMsg = mustGet('statusMsg');
 
 // 新增工具栏元素
-const zoomPercent = document.getElementById('zoomPercent');
-const zoomInBtn = document.getElementById('zoomInBtn');
-const zoomOutBtn = document.getElementById('zoomOutBtn');
-const resetViewBtn = document.getElementById('resetViewBtn');
-const canvasWrapper = document.getElementById('canvasWrapper');
-const modeVerticalBtn = document.getElementById('modeVertical');
-const modeHorizontalBtn = document.getElementById('modeHorizontal');
-const modePanBtn = document.getElementById('modePan');
+const zoomPercent = mustGet('zoomPercent');
+const zoomInBtn = mustGet('zoomInBtn');
+const zoomOutBtn = mustGet('zoomOutBtn');
+const resetViewBtn = mustGet('resetViewBtn');
+const canvasWrapper = mustGet('canvasWrapper');
+const modeVerticalBtn = mustGet('modeVertical');
+const modeHorizontalBtn = mustGet('modeHorizontal');
+const modePanBtn = mustGet('modePan');
 
 // 等分工具
-const divideRowsInput = document.getElementById('divideRows');
-const divideColsInput = document.getElementById('divideCols');
-const applyDivideBtn = document.getElementById('applyDivideBtn');
-const snapToggle = document.getElementById('snapToggle'); // 吸附开关
-const smartCenterToggle = document.getElementById('smartCenterToggle'); // 智能居中开关
-const centerConfigDetails = document.getElementById('centerConfigDetails');
-const centerThreshold = document.getElementById('centerThreshold');
-const thresholdVal = document.getElementById('thresholdVal');
-const centerFillColor = document.getElementById('centerFillColor');
-const centerFormat = document.getElementById('centerFormat');
+const divideRowsInput = mustGet('divideRows');
+const divideColsInput = mustGet('divideCols');
+const applyDivideBtn = mustGet('applyDivideBtn');
+const snapToggle = mustGet('snapToggle'); // 吸附开关
+const smartCenterToggle = mustGet('smartCenterToggle'); // 智能居中开关
+const centerConfigDetails = mustGet('centerConfigDetails');
+const centerThreshold = mustGet('centerThreshold');
+const thresholdVal = mustGet('thresholdVal');
+const centerFillColor = mustGet('centerFillColor');
+const centerFormat = mustGet('centerFormat');
 
-smartCenterToggle.addEventListener('change', (e) => {
-    centerConfigDetails.classList.toggle('hidden', !e.target.checked);
-});
+if (smartCenterToggle)
+    smartCenterToggle.addEventListener('change', (e) => {
+        if (centerConfigDetails) centerConfigDetails.classList.toggle('hidden', !e.target.checked);
+    });
 
-centerThreshold.addEventListener('input', (e) => {
-    thresholdVal.textContent = e.target.value;
-});
+if (centerThreshold)
+    centerThreshold.addEventListener('input', (e) => {
+        if (thresholdVal) thresholdVal.textContent = e.target.value;
+    });
 
 // 放大镜
-const magnifier = document.getElementById('magnifier');
-const magCtx = magnifier.getContext('2d');
+const magnifier = mustGet('magnifier');
+const magCtx = magnifier ? magnifier.getContext('2d') : null;
 const MAG_SIZE = 150;
 const MAG_ZOOM = 4;
 
@@ -83,35 +85,34 @@ let draggingLine = null; // { axis: 'x'|'y', index: number }
 // 分段选择器逻辑
 function setMode(mode) {
     currentMode = mode;
-    modeVerticalBtn.classList.toggle('active', mode === 'v');
-    modeHorizontalBtn.classList.toggle('active', mode === 'h');
-    modePanBtn.classList.toggle('active', mode === 'p');
+    if (modeVerticalBtn) modeVerticalBtn.classList.toggle('active', mode === 'v');
+    if (modeHorizontalBtn) modeHorizontalBtn.classList.toggle('active', mode === 'h');
+    if (modePanBtn) modePanBtn.classList.toggle('active', mode === 'p');
 
-    // 视觉反馈：平移模式下画布光标变为 grab
-    if (mode === 'p') {
-        canvas.style.cursor = 'grab';
-    } else {
-        canvas.style.cursor = 'crosshair';
-    }
+    // 视觉反馈：平移模式下画布光标变为 grab（画布缺失只跳过光标，模式状态照常生效）
+    if (canvas) canvas.style.cursor = mode === 'p' ? 'grab' : 'crosshair';
 }
 
-modeVerticalBtn.addEventListener('click', () => setMode('v'));
-modeHorizontalBtn.addEventListener('click', () => setMode('h'));
-modePanBtn.addEventListener('click', () => setMode('p'));
+if (modeVerticalBtn) modeVerticalBtn.addEventListener('click', () => setMode('v'));
+if (modeHorizontalBtn) modeHorizontalBtn.addEventListener('click', () => setMode('h'));
+if (modePanBtn) modePanBtn.addEventListener('click', () => setMode('p'));
 
-snapToggle.addEventListener('change', (e) => {
-    isSnapEnabled = e.target.checked;
-    showStatus(isSnapEnabled ? '智能吸附已开启' : '智能吸附已暂时禁用', 'success');
-});
+if (snapToggle)
+    snapToggle.addEventListener('change', (e) => {
+        isSnapEnabled = e.target.checked;
+        showStatus(isSnapEnabled ? '智能吸附已开启' : '智能吸附已暂时禁用', 'success');
+    });
 
 // 等分功能
-applyDivideBtn.addEventListener('click', () => {
-    if (!currentImage) return;
-    // 裁剪到 [1,50]，避免负数/超大值生成非法或大量重复的切分线（服务端会因 cutX 非严格递增返回 400）
-    const rows = Math.min(50, Math.max(1, parseInt(divideRowsInput.value, 10) || 1));
-    const cols = Math.min(50, Math.max(1, parseInt(divideColsInput.value, 10) || 1));
-    applyEqualDivide(rows, cols);
-});
+if (applyDivideBtn)
+    applyDivideBtn.addEventListener('click', () => {
+        if (!currentImage) return;
+        if (!divideRowsInput || !divideColsInput) return; // 输入框缺失时不猜默认值，跳过本次等分
+        // 裁剪到 [1,50]，避免负数/超大值生成非法或大量重复的切分线（服务端会因 cutX 非严格递增返回 400）
+        const rows = Math.min(50, Math.max(1, parseInt(divideRowsInput.value, 10) || 1));
+        const cols = Math.min(50, Math.max(1, parseInt(divideColsInput.value, 10) || 1));
+        applyEqualDivide(rows, cols);
+    });
 
 function applyEqualDivide(rows, cols) {
     // 保留边界线 (0 和 max)，重新生成中间线
@@ -176,7 +177,7 @@ async function init() {
         const res = await fetch('/api/default-image');
         const data = await res.json();
         if (data.path) {
-            imgPathInput.value = data.path;
+            if (imgPathInput) imgPathInput.value = data.path;
             loadImage(data.path);
         }
     } catch (e) {
@@ -198,37 +199,45 @@ function showStatus(msg, type = 'success') {
     }, 5000);
 }
 
-loadBtn.addEventListener('click', async () => {
-    if (loadBtn.classList.contains('loading')) return;
-
-    // 立即进入加载状态，避免 PowerShell 启动造成的“未点击”错觉
-    loadBtn.classList.add('loading');
-    showStatus('正在为您开启系统文件选择器...', 'success');
-
-    try {
-        const res = await fetch('/api/open-file-dialog');
-        const data = await res.json();
-
-        if (data.success && data.path) {
-            imgPathInput.value = data.path;
-            imgPathInput.classList.remove('path-warning'); // 消除警告
-            const absolutePath = data.path.trim();
-            if (absolutePath) loadImage(absolutePath);
-        } else {
-            // fetch 对 5xx 不抛错，成功分支之外必须显式提示，否则用户点击后毫无反馈
-            showStatus('❌ ' + (data.error || '文件选择器调用失败'), 'error');
+if (loadBtn)
+    loadBtn.addEventListener('click', async () => {
+        if (loadBtn.classList.contains('loading')) return;
+        // 路径输入框缺失就无法回填选择结果，提前退出并提示，省掉一次无意义的对话框调用
+        if (!imgPathInput) {
+            showStatus('❌ 页面缺少路径输入框，无法载入所选图片', 'error');
+            return;
         }
-    } catch {
-        showStatus('文件选择器调用失败，已尝试使用输入框中的路径', 'error');
-        const p = imgPathInput.value.trim();
-        if (p) loadImage(p);
-    } finally {
-        // 完成或取消后立即恢复
-        loadBtn.classList.remove('loading');
-    }
-});
+
+        // 立即进入加载状态，避免 PowerShell 启动造成的“未点击”错觉
+        loadBtn.classList.add('loading');
+        showStatus('正在为您开启系统文件选择器...', 'success');
+
+        try {
+            const res = await fetch('/api/open-file-dialog');
+            const data = await res.json();
+
+            if (data.success && data.path) {
+                imgPathInput.value = data.path;
+                imgPathInput.classList.remove('path-warning'); // 消除警告
+                const absolutePath = data.path.trim();
+                if (absolutePath) loadImage(absolutePath);
+            } else {
+                // fetch 对 5xx 不抛错，成功分支之外必须显式提示，否则用户点击后毫无反馈
+                showStatus('❌ ' + (data.error || '文件选择器调用失败'), 'error');
+            }
+        } catch {
+            showStatus('文件选择器调用失败，已尝试使用输入框中的路径', 'error');
+            const p = imgPathInput.value.trim();
+            if (p) loadImage(p);
+        } finally {
+            // 完成或取消后立即恢复
+            loadBtn.classList.remove('loading');
+        }
+    });
 
 function loadImage(path) {
+    // 画布与切图按钮任一缺失时预览/切片都无从谈起，直接跳过（mustGet 已在启动时报错）
+    if (!canvas || !splitBtn) return;
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
@@ -256,12 +265,13 @@ function loadImage(path) {
 
 // 视图控制
 function updateTransform() {
-    canvasWrapper.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
-    zoomPercent.textContent = Math.round(scale * 100) + '%';
+    if (canvasWrapper) canvasWrapper.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    if (zoomPercent) zoomPercent.textContent = Math.round(scale * 100) + '%';
 }
 
 function resetView() {
     if (!currentImage) return;
+    if (!canvasWrapper) return; // 容器缺失时无法计算自适应缩放
     const padding = 60;
     const parent = canvasWrapper.parentElement;
     const maxW = parent.clientWidth - padding;
@@ -286,13 +296,14 @@ function zoom(delta) {
 }
 
 // 事件监听
-zoomInBtn.addEventListener('click', () => zoom(1));
-zoomOutBtn.addEventListener('click', () => zoom(-1));
-resetViewBtn.addEventListener('click', resetView);
+if (zoomInBtn) zoomInBtn.addEventListener('click', () => zoom(1));
+if (zoomOutBtn) zoomOutBtn.addEventListener('click', () => zoom(-1));
+if (resetViewBtn) resetViewBtn.addEventListener('click', resetView);
 
 // 放大镜渲染
 function renderMagnifier(mouseEvent, snapValue, axis) {
-    if (!currentImage) return;
+    // 画布/放大镜任一缺失都跳过绘制：鼠标事件里抛错同样会打断拖线交互
+    if (!currentImage || !canvas || !magnifier || !magCtx) return;
 
     // 显示放大镜
     magnifier.style.display = 'block';
@@ -391,64 +402,65 @@ function getMousePos(e) {
 
 const HIT_TOLERANCE = 12;
 
-canvas.addEventListener('mousedown', (e) => {
-    if (!currentImage) return;
+if (canvas)
+    canvas.addEventListener('mousedown', (e) => {
+        if (!currentImage) return;
 
-    // 平移逻辑：
-    // 1. 中键或 Shift+左键（全局快捷键）
-    // 2. 或是处于 'p' (Pan) 模式下的左键
-    // 3. 或是按下空格键时的左键
-    const isExplicitPan = e.button === 1 || (e.button === 0 && (e.shiftKey || isSpacePressed));
-    const isModePan = e.button === 0 && currentMode === 'p';
+        // 平移逻辑：
+        // 1. 中键或 Shift+左键（全局快捷键）
+        // 2. 或是处于 'p' (Pan) 模式下的左键
+        // 3. 或是按下空格键时的左键
+        const isExplicitPan = e.button === 1 || (e.button === 0 && (e.shiftKey || isSpacePressed));
+        const isModePan = e.button === 0 && currentMode === 'p';
 
-    if (isExplicitPan || isModePan) {
-        isPanning = true;
-        startPanX = e.clientX - translateX;
-        startPanY = e.clientY - translateY;
-        canvas.style.cursor = 'grabbing';
-        return;
-    }
-
-    const pos = getMousePos(e);
-    const snapT = HIT_TOLERANCE / scale;
-
-    // 检查是否点击了现有线（拖拽逻辑优先级最高）
-    for (let i = 1; i < lines.x.length - 1; i++) {
-        if (Math.abs(pos.x - lines.x[i]) <= snapT) {
-            draggingLine = { axis: 'x', index: i };
+        if (isExplicitPan || isModePan) {
+            isPanning = true;
+            startPanX = e.clientX - translateX;
+            startPanY = e.clientY - translateY;
+            canvas.style.cursor = 'grabbing';
             return;
         }
-    }
-    for (let i = 1; i < lines.y.length - 1; i++) {
-        if (Math.abs(pos.y - lines.y[i]) <= snapT) {
-            draggingLine = { axis: 'y', index: i };
-            return;
+
+        const pos = getMousePos(e);
+        const snapT = HIT_TOLERANCE / scale;
+
+        // 检查是否点击了现有线（拖拽逻辑优先级最高）
+        for (let i = 1; i < lines.x.length - 1; i++) {
+            if (Math.abs(pos.x - lines.x[i]) <= snapT) {
+                draggingLine = { axis: 'x', index: i };
+                return;
+            }
         }
-    }
+        for (let i = 1; i < lines.y.length - 1; i++) {
+            if (Math.abs(pos.y - lines.y[i]) <= snapT) {
+                draggingLine = { axis: 'y', index: i };
+                return;
+            }
+        }
 
-    // 平移模式下左键如果不点击线，则不添加新线，直接返回（前面已处理平移启动）
-    if (currentMode === 'p') return;
+        // 平移模式下左键如果不点击线，则不添加新线，直接返回（前面已处理平移启动）
+        if (currentMode === 'p') return;
 
-    // 添加新线逻辑
-    // 根据当前模式和 Alt 键判断方向
-    let useHorizontal = currentMode === 'h';
-    if (e.altKey) useHorizontal = !useHorizontal;
+        // 添加新线逻辑
+        // 根据当前模式和 Alt 键判断方向
+        let useHorizontal = currentMode === 'h';
+        if (e.altKey) useHorizontal = !useHorizontal;
 
-    const axis = useHorizontal ? 'y' : 'x';
-    const rawValue = useHorizontal ? pos.y : pos.x;
+        const axis = useHorizontal ? 'y' : 'x';
+        const rawValue = useHorizontal ? pos.y : pos.x;
 
-    // 应用吸附逻辑
-    const snappedValue = snapToNearest(rawValue, axis);
+        // 应用吸附逻辑
+        const snappedValue = snapToNearest(rawValue, axis);
 
-    if (useHorizontal) {
-        lines.y.push(snappedValue);
-        lines.y.sort((a, b) => a - b);
-    } else {
-        lines.x.push(snappedValue);
-        lines.x.sort((a, b) => a - b);
-    }
-    draw();
-});
+        if (useHorizontal) {
+            lines.y.push(snappedValue);
+            lines.y.sort((a, b) => a - b);
+        } else {
+            lines.x.push(snappedValue);
+            lines.x.sort((a, b) => a - b);
+        }
+        draw();
+    });
 
 window.addEventListener('mousemove', (e) => {
     if (isPanning) {
@@ -458,7 +470,7 @@ window.addEventListener('mousemove', (e) => {
         return;
     }
 
-    if (!currentImage) return;
+    if (!currentImage || !canvas) return;
     const pos = getMousePos(e);
 
     if (draggingLine) {
@@ -502,8 +514,10 @@ window.addEventListener('mouseup', () => {
     isPanning = false;
     draggingLine = null;
     snapIndicator = null;
-    magnifier.style.display = 'none';
-    magnifier.classList.remove('snapped');
+    if (magnifier) {
+        magnifier.style.display = 'none';
+        magnifier.classList.remove('snapped');
+    }
     if (canvas) canvas.style.cursor = currentMode === 'p' || isSpacePressed ? 'grab' : 'crosshair';
     draw();
 });
@@ -539,28 +553,30 @@ window.addEventListener(
     { passive: false }
 );
 
-canvas.addEventListener('dblclick', (e) => {
-    if (!currentImage) return;
-    const pos = getMousePos(e);
-    const snapT = HIT_TOLERANCE / scale;
+if (canvas)
+    canvas.addEventListener('dblclick', (e) => {
+        if (!currentImage) return;
+        const pos = getMousePos(e);
+        const snapT = HIT_TOLERANCE / scale;
 
-    for (let i = 1; i < lines.x.length - 1; i++) {
-        if (Math.abs(pos.x - lines.x[i]) <= snapT) {
-            lines.x.splice(i, 1);
-            draw();
-            return;
+        for (let i = 1; i < lines.x.length - 1; i++) {
+            if (Math.abs(pos.x - lines.x[i]) <= snapT) {
+                lines.x.splice(i, 1);
+                draw();
+                return;
+            }
         }
-    }
-    for (let i = 1; i < lines.y.length - 1; i++) {
-        if (Math.abs(pos.y - lines.y[i]) <= snapT) {
-            lines.y.splice(i, 1);
-            draw();
-            return;
+        for (let i = 1; i < lines.y.length - 1; i++) {
+            if (Math.abs(pos.y - lines.y[i]) <= snapT) {
+                lines.y.splice(i, 1);
+                draw();
+                return;
+            }
         }
-    }
-});
+    });
 
 function draw() {
+    if (!ctx) return; // 上下文缺失时静默跳过，画布本身的报错已由 mustGet 输出
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (currentImage) {
         // 亮度恢复：移除之前的 0.6 透明度
@@ -626,61 +642,71 @@ function draw() {
     }
 }
 
-splitBtn.addEventListener('click', async () => {
-    if (!currentImage) return;
-    splitBtn.disabled = true;
-    // 切图正在写盘，退出会留下半截切片，处理期间一并禁用
-    exitBtn.disabled = true;
-    showStatus('正在执行图像处理，请稍候...', 'success');
-
-    try {
-        const res = await fetch('/api/split-custom', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                filePath: imgPathInput.value.trim(),
-                cutX: lines.x,
-                cutY: lines.y,
-                smartCenter: smartCenterToggle.checked,
-                centerConfig: smartCenterToggle.checked
-                    ? {
-                          threshold: parseInt(centerThreshold.value),
-                          fillColor: centerFillColor.value,
-                          outputFormat: centerFormat.value,
-                          sides: Array.from(document.querySelectorAll('.center-side:checked')).map((cb) => cb.value)
-                      }
-                    : null
-            })
-        });
-        const data = await res.json();
-
-        if (data.success) {
-            const failed = Array.isArray(data.failedTiles) ? data.failedTiles : [];
-            if (failed.length > 0) {
-                showStatus(`⚠️ 部分成功（${failed.length} 张失败），其余产物已输出到与原图同级的目录下。`, 'success');
-            } else {
-                showStatus('✨ 切割成功！产物已输出到与原图同级的目录下。', 'success');
-            }
-        } else {
-            showStatus('❌ 错误: ' + data.error, 'error');
+if (splitBtn)
+    splitBtn.addEventListener('click', async () => {
+        if (!currentImage) return;
+        // 表单元素缺失就拼不出合法请求，提前退出并提示，避免把 undefined 当参数发出去
+        if (!imgPathInput || !smartCenterToggle || !centerThreshold || !centerFillColor || !centerFormat) {
+            showStatus('❌ 页面缺少必要的表单元素，无法执行切图', 'error');
+            return;
         }
-    } catch (e) {
-        showStatus('请求失败: ' + e.message, 'error');
-    } finally {
-        splitBtn.disabled = false;
-        exitBtn.disabled = false;
-    }
-});
+        splitBtn.disabled = true;
+        // 切图正在写盘，退出会留下半截切片，处理期间一并禁用
+        if (exitBtn) exitBtn.disabled = true;
+        showStatus('正在执行图像处理，请稍候...', 'success');
 
-exitBtn.addEventListener('click', async () => {
-    try {
-        await fetch('/api/exit', { method: 'POST' });
-        showStatus('服务已关闭，您可以安全关闭此窗口。', 'success');
-        window.close();
-    } catch {
-        showStatus('无法联系服务，可能已经关闭。', 'error');
-    }
-});
+        try {
+            const res = await fetch('/api/split-custom', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    filePath: imgPathInput.value.trim(),
+                    cutX: lines.x,
+                    cutY: lines.y,
+                    smartCenter: smartCenterToggle.checked,
+                    centerConfig: smartCenterToggle.checked
+                        ? {
+                              threshold: parseInt(centerThreshold.value),
+                              fillColor: centerFillColor.value,
+                              outputFormat: centerFormat.value,
+                              sides: Array.from(document.querySelectorAll('.center-side:checked')).map((cb) => cb.value)
+                          }
+                        : null
+                })
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                const failed = Array.isArray(data.failedTiles) ? data.failedTiles : [];
+                if (failed.length > 0) {
+                    showStatus(
+                        `⚠️ 部分成功（${failed.length} 张失败），其余产物已输出到与原图同级的目录下。`,
+                        'success'
+                    );
+                } else {
+                    showStatus('✨ 切割成功！产物已输出到与原图同级的目录下。', 'success');
+                }
+            } else {
+                showStatus('❌ 错误: ' + data.error, 'error');
+            }
+        } catch (e) {
+            showStatus('请求失败: ' + e.message, 'error');
+        } finally {
+            splitBtn.disabled = false;
+            if (exitBtn) exitBtn.disabled = false;
+        }
+    });
+
+if (exitBtn)
+    exitBtn.addEventListener('click', async () => {
+        try {
+            await fetch('/api/exit', { method: 'POST' });
+            showStatus('服务已关闭，您可以安全关闭此窗口。', 'success');
+            window.close();
+        } catch {
+            showStatus('无法联系服务，可能已经关闭。', 'error');
+        }
+    });
 
 window.addEventListener('resize', resetView);
 
@@ -690,7 +716,7 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
         if (!isSpacePressed) {
             isSpacePressed = true;
-            canvas.style.cursor = 'grab';
+            if (canvas) canvas.style.cursor = 'grab';
         }
         e.preventDefault(); // 阻止页面滚动
     }
@@ -699,7 +725,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
     if (e.code === 'Space') {
         isSpacePressed = false;
-        canvas.style.cursor = currentMode === 'p' ? 'grab' : 'crosshair';
+        if (canvas) canvas.style.cursor = currentMode === 'p' ? 'grab' : 'crosshair';
     }
 });
 
@@ -717,6 +743,9 @@ window.addEventListener('dragleave', () => {
 window.addEventListener('drop', (e) => {
     e.preventDefault();
     document.body.classList.remove('drag-active');
+
+    // 输入框/画布/切图按钮缺失时拖拽预览也无处落地，直接跳过该分支
+    if (!imgPathInput || !canvas || !splitBtn) return;
 
     const file = e.dataTransfer.files[0];
     if (file && file.type.startsWith('image/')) {
