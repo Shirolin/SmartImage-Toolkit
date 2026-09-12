@@ -1,8 +1,23 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import sharp from 'sharp';
 import { SUPPORTED_EXTS, getFiles, type FilesWarning } from '../src/utils';
 import { makeTempDir, createPng } from './helpers';
+
+// 回归用例的临时目录统一登记清理，保证可重复与可并行
+const tempDirs: string[] = [];
+function trackedTempDir(): string {
+    const dir = makeTempDir();
+    tempDirs.push(dir);
+    return dir;
+}
+afterEach(() => {
+    // Windows 上 sharp 的写盘句柄可能短暂滞留，删除临时目录带重试
+    for (const dir of tempDirs.splice(0)) {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+});
 
 describe('SUPPORTED_EXTS', () => {
     it('包含主流与现代化图片格式', () => {
@@ -82,5 +97,72 @@ describe('getFiles depth 语义（与旧版逐层递归对齐）', () => {
         const warns: FilesWarning[] = [];
         expect(await getFiles(dir, 1, 0, (w) => warns.push(w))).toEqual([]);
         expect(warns.some((w) => w.kind === 'depth')).toBe(true);
+    });
+});
+
+describe('getFiles 受支持扩展名与链接遍历', () => {
+    it('单独的 .tif / .jfif 输入能被返回（不再被判为不受支持）', async () => {
+        const dir = trackedTempDir();
+        const tif = path.join(dir, 'scan.tif');
+        await sharp({ create: { width: 8, height: 8, channels: 3, background: '#f00' } })
+            .tiff()
+            .toFile(tif);
+        const jfif = path.join(dir, 'photo.jfif');
+        await sharp({ create: { width: 8, height: 8, channels: 3, background: '#f00' } })
+            .jpeg()
+            .toFile(jfif);
+
+        expect(await getFiles(tif)).toEqual([tif]);
+        expect(await getFiles(jfif)).toEqual([jfif]);
+    });
+
+    it('入口目录 junction 会被跟随，内部图片照常返回', async () => {
+        const root = trackedTempDir();
+        const real = path.join(root, 'real');
+        fs.mkdirSync(real);
+        await createPng(path.join(real, 'inner.png'), 8, 8);
+        const link = path.join(root, 'link');
+        // 用户显式传入的目录联接（Windows mklink /J）必须展开，否则整批零产出
+        fs.symlinkSync(real, link, 'junction');
+
+        expect(await getFiles(link)).toEqual([path.join(link, 'inner.png')]);
+    });
+
+    it('深层自环链接被跳过，不会无限递归', async () => {
+        const root = trackedTempDir();
+        const sub = path.join(root, 'sub');
+        fs.mkdirSync(sub);
+        const img = path.join(sub, 'deep.png');
+        await createPng(img, 8, 8);
+        // 深层 junction 指回祖先目录：跟随即死循环
+        fs.symlinkSync(root, path.join(sub, 'loop'), 'junction');
+
+        const warns: FilesWarning[] = [];
+        expect(await getFiles(root, 10, 0, (w) => warns.push(w))).toEqual([img]);
+        expect(warns.some((w) => w.kind === 'symlink')).toBe(true);
+    });
+
+    it('深度超限只告警一次，且被截断的受支持图片数进入 skippedFiles', async () => {
+        const dir = trackedTempDir();
+        const rootFile = path.join(dir, 'root.png');
+        await createPng(rootFile, 8, 8);
+        const sub = path.join(dir, 'sub');
+        fs.mkdirSync(sub);
+        await createPng(path.join(sub, 'a.png'), 8, 8);
+        await createPng(path.join(sub, 'b.png'), 8, 8);
+        await sharp({ create: { width: 8, height: 8, channels: 3, background: '#f00' } })
+            .tiff()
+            .toFile(path.join(sub, 'c.tif'));
+        fs.writeFileSync(path.join(sub, 'note.txt'), 'hello');
+        fs.mkdirSync(path.join(sub, 'deeper'));
+
+        const warns: FilesWarning[] = [];
+        // maxDepth=1：sub 层整体超限被截断，根层文件不受影响
+        expect(await getFiles(dir, 1, 0, (w) => warns.push(w))).toEqual([rootFile]);
+
+        const depthWarns = warns.filter((w) => w.kind === 'depth');
+        expect(depthWarns).toHaveLength(1); // 同层多个条目也只告警一次
+        expect(depthWarns[0].path).toBe(sub);
+        expect(depthWarns[0].skippedFiles).toBe(3); // 仅受支持图片：a.png / b.png / c.tif
     });
 });
