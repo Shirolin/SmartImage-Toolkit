@@ -41,7 +41,9 @@ export async function convertImage(
 
     let outputExt = '';
     let suffix = '';
-    let sharpInstance = sharp(filePath);
+    // .rotate() 无参即按 EXIF Orientation 自动定向：sharp 默认不会旋转，且输出会剥离元数据，
+    // 手机竖拍图（orientation 6/8）会被转成横躺的成品。orientation=1 时这是 no-op。
+    let sharpInstance = sharp(filePath).rotate();
 
     switch (format) {
         case 'webp':
@@ -75,9 +77,9 @@ export async function convertImage(
                 // 被裁剪过的运行时或受第三方全局补丁影响的会话可能只剩 fetch 而丢了 Blob，
                 // 此时用 node:buffer 的等价实现补回；两者都缺则直接给可操作的版本提示，
                 // 不让 "Blob is not defined" 这类晦涩 ReferenceError 冒到用户面前。
-                if (typeof globalThis.fetch !== 'function') {
+                if (typeof globalThis.fetch !== 'function' || typeof globalThis.Response !== 'function') {
                     throw new Error(
-                        `当前运行时 ${process.version} 缺少全局 fetch，AI 抠图需要 Node 18 及以上，请升级 Node 后重试`
+                        `当前运行时 ${process.version} 缺少全局 fetch/Response，AI 抠图需要 Node 18 及以上，请升级 Node 后重试`
                     );
                 }
                 if (typeof globalThis.Blob === 'undefined') {
@@ -90,7 +92,8 @@ export async function convertImage(
                 }
 
                 try {
-                    normalizedBuffer = await sharp(filePath).png().toBuffer();
+                    // 与转换链路一致：AI 输入也要按 EXIF 摆正，否则抠图基于躺倒的像素做推理
+                    normalizedBuffer = await sharp(filePath).rotate().png().toBuffer();
                 } catch (sharpErr: unknown) {
                     let errMsg = '未知 Sharp 处理错误';
                     if (sharpErr instanceof Error) {
@@ -154,23 +157,39 @@ export async function convertImage(
                 const aiResultBuffer = Buffer.from(arrayBuffer);
                 const metadata = await sharp(normalizedBuffer).metadata();
 
+                // 尺寸以返回体自带的 mime 参数为准（@imgly 会写成 image/x-rgba8;width=W;height=H），
+                // 解析不到才退回输入尺寸：sharp 对超长 raw 只静默截断，一旦上游尺寸漂移
+                // 就会写出「尺寸正确但像素错位」的图并记成功。长度不符时明确失败。
+                const blobDims = /width=(\d+);height=(\d+)/.exec(blob.type);
+                const outWidth = blobDims ? Number(blobDims[1]) : (metadata.width ?? 0);
+                const outHeight = blobDims ? Number(blobDims[2]) : (metadata.height ?? 0);
+                if (outWidth > 0 && outHeight > 0 && aiResultBuffer.length !== outWidth * outHeight * 4) {
+                    throw new Error(
+                        `AI 输出尺寸异常: 期望 ${outWidth}x${outHeight}x4=${outWidth * outHeight * 4} 字节，实际 ${aiResultBuffer.length}`
+                    );
+                }
+
                 let resultSharp = sharp(aiResultBuffer, {
                     raw: {
-                        width: metadata.width ?? 0,
-                        height: metadata.height ?? 0,
+                        width: outWidth,
+                        height: outHeight,
                         channels: 4 // RGBA 4通道
                     }
                 });
 
-                resultSharp = applyEncoding(resultSharp, outputExt);
+                // AI 出的 RGBA 必须保真：png({quality}) 隐含 palette:true（缩到 ≤256 色并抖动），
+                // 会破坏抠图的半透明边缘与渐变色（实测 74.7% 像素被改动、最大偏差 250）。
+                // 普通 --format png 的量化优化通道保持不变，只在这里显式关闭调色板。
+                resultSharp =
+                    outputExt === '.png'
+                        ? resultSharp.png({ compressionLevel: 9, effort: 8, palette: false })
+                        : applyEncoding(resultSharp, outputExt);
 
                 finalBuffer = await resultSharp.toBuffer();
                 sharpInstance = sharp(finalBuffer);
             } catch (err: unknown) {
-                let errorDetails = '';
-                if (err instanceof Error) {
-                    errorDetails = err.message;
-                }
+                // 非 Error 抛出（native 层、自定义 polyfill 常见）也要留下可见原因，不能只剩空串
+                const errorDetails = err instanceof Error ? err.message : String(err) || '未知错误';
                 return {
                     status: 'error',
                     file: filePath,
