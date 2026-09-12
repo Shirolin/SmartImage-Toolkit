@@ -135,17 +135,30 @@ export async function splitImage(
 
         // 分批并发：每批最多 BATCH_SIZE 个切片任务，批内 settle 后再建下一批，
         // 避免一次性为全部格子建管道导致内存打爆（见缺陷 4）
-        let tileBatch: Array<Promise<string>> = [];
+        // 批次条目带上坐标：settle 时机（批满/收尾）与格子循环不同步，用循环变量归因会错行错列
+        let tileBatch: Array<{ row: number; col: number; job: Promise<string> }> = [];
         // 先落盘后记账：toFile 成功才 push，失败记 failedTiles 继续跑
         const settleBatch = async (): Promise<void> => {
             if (tileBatch.length === 0) return;
-            const settlements = await Promise.allSettled(tileBatch);
-            for (const settlement of settlements) {
+            const settlements = await Promise.allSettled(tileBatch.map((tile) => tile.job));
+            for (let i = 0; i < settlements.length; i++) {
+                const settlement = settlements[i];
+                const { row, col } = tileBatch[i];
                 if (settlement.status === 'fulfilled') {
                     generatedFiles.push(settlement.value);
                 } else {
-                    const tileErr = settlement.reason as TileError;
-                    failedTiles.push({ row: tileErr.row, col: tileErr.col, reason: tileErr.message });
+                    // 收窄而非断言：非 TileError（如原生层异常）也按普通错误记账，
+                    // 否则记账循环自身抛错会被外层折成 error + generatedFiles: []，整批账本全丢（见缺陷 5）
+                    const reason = settlement.reason;
+                    if (reason instanceof TileError) {
+                        failedTiles.push({ row: reason.row, col: reason.col, reason: reason.message });
+                    } else {
+                        failedTiles.push({
+                            row,
+                            col,
+                            reason: reason instanceof Error ? reason.message : String(reason)
+                        });
+                    }
                 }
             }
             tileBatch = [];
@@ -290,7 +303,7 @@ export async function splitImage(
                     }
                 })();
 
-                tileBatch.push(tileJob);
+                tileBatch.push({ row, col, job: tileJob });
                 // 批满即 settle，控制同时在跑的 sharp 管道数量
                 if (tileBatch.length >= BATCH_SIZE) {
                     await settleBatch();

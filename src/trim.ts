@@ -39,7 +39,6 @@ export async function processTrimOrCrop(
     const isTrim = action === 'trim';
     const subDirName = isTrim ? 'trimmed' : 'cropped';
     const outDir = path.join(dir, subDirName);
-    await ensureDir(outDir);
 
     // 占位路径声明：allocate 移到全部参数校验之后，校验早退时尚无占位可泄漏
     let outputPath = '';
@@ -66,8 +65,13 @@ export async function processTrimOrCrop(
             // --- 智能边向选择探底方案 ---
             // 隐式测试：仅在内存中执行全方位 Trim 看能切出什么边界
             // 探测必须与最终流水线同样先 rotate()，否则 trimOffset 基于未摆正坐标系，extract 会整体错位
-            const testProbe = sharp(filePath).rotate().trim({ threshold: trimCfg.threshold });
-            const { info: probeInfo } = await testProbe.toBuffer({ resolveWithObject: true });
+            // 探测只要边界信息：raw() 输出的 info 同样带 trimOffsetLeft/Top 与裁后宽高，
+            // 省掉一次全图编码往返，避免大图批量处理时的 CPU 与内存峰值翻倍（见缺陷 4）
+            const { info: probeInfo } = await sharp(filePath)
+                .rotate()
+                .trim({ threshold: trimCfg.threshold })
+                .raw()
+                .toBuffer({ resolveWithObject: true });
 
             // 仅当确实发生切除行为（尺寸变化）才进入后续运算，否则按原图保存
             if (probeInfo.width !== originalW || probeInfo.height !== originalH) {
@@ -128,6 +132,8 @@ export async function processTrimOrCrop(
         }
 
         // O_EXCL 独占占位命名：全部参数校验通过后才建占位，早退路径无残留
+        // 建目录同样在 try 内：目录不可写/路径过长/磁盘满时按 OpResult 报错，不让 reject 逃出契约（见缺陷 3）
+        await ensureDir(outDir);
         outputPath = await allocateFilePath(outDir, name, actualExt);
         // 统一编码后落盘（未知扩展原样透传）
         sharpInstance = applyEncoding(sharpInstance, actualExt);

@@ -6,6 +6,7 @@ import { normalizeExt, equalExt } from './shared/formats';
 import { orientedSize } from './shared/orientation';
 import { applyEncoding } from './shared/encode';
 import { allocateFilePath } from './shared/output-naming';
+import { MAX_DIM, MAX_PERCENT } from './shared/constants';
 import type { OpResult } from './shared/results';
 
 export interface ResizeOptions {
@@ -73,6 +74,13 @@ export async function resizeImage(
                 // 负数与 0/缺失同等视为非法：钳到 1px 记成功会掩盖参数错误
                 if (!options.percent || options.percent <= 0)
                     return { status: 'error', file: filePath, reason: '按比例缩放缺少百分比参数' };
+                // 百分比上限：此前只钳下界，手滑输入 100000 会真去渲染天量像素的巨图
+                if (options.percent > MAX_PERCENT)
+                    return {
+                        status: 'error',
+                        file: filePath,
+                        reason: `缩放百分比超限：最大 ${MAX_PERCENT}%（当前 ${options.percent}%）`
+                    };
                 if (options.percent === 100 && (!normalizedFormat || equalExt(normalizedFormat, ext))) {
                     return { status: 'skipped', file: filePath, reason: '比例为100%且未要求格式转换，已跳过' };
                 }
@@ -95,6 +103,22 @@ export async function resizeImage(
                 break;
             default:
                 return { status: 'error', file: filePath, reason: '不支持的缩放模式' };
+        }
+
+        // 目标尺寸上限：单边模式的另一条边由 sharp 按原图比例折算，这里同样折算后一起校验，
+        // 避免 20000px 宽 + 竖长原图产出巨图。校验位于 allocateFilePath 之前，拦截后不留占位文件
+        const projectedWidth =
+            targetWidth ?? (targetHeight !== undefined ? (targetHeight * oriented.width) / oriented.height : 0);
+        const projectedHeight =
+            targetHeight ?? (targetWidth !== undefined ? (targetWidth * oriented.height) / oriented.width : 0);
+        if (projectedWidth > MAX_DIM || projectedHeight > MAX_DIM) {
+            return {
+                status: 'error',
+                file: filePath,
+                reason: `目标尺寸超限：单边最大 ${MAX_DIM}px（计算得 ${Math.round(projectedWidth)}x${Math.round(
+                    projectedHeight
+                )}）`
+            };
         }
 
         // rotate() 无参时按 EXIF Orientation 自动摆正，且必须在 resize 之前应用，

@@ -23,13 +23,15 @@ export async function processCenter(
 
     // 输出扩展名归一化（小写；.jpeg→.jpg），未知格式原样透传
     const actualExt = normalizeExt(formatExt || ext);
-    const outDir = path.join(dir, 'centered');
-    await ensureDir(outDir);
-
-    // 独占占位命名，杜绝先判后写竞争
-    const outputPath = await allocateFilePath(outDir, name, actualExt);
+    // 占位路径外置声明：建目录/占位已移入 try，异常时统一转成 error 返回
+    let outputPath = '';
 
     try {
+        // 建目录与独占占位都必须在 try 内：目录不可写/路径过长/磁盘满时异常要折成 OpResult，
+        // 不能让 reject 逃出契约（见缺陷 3）
+        const outDir = path.join(dir, 'centered');
+        await ensureDir(outDir);
+        outputPath = await allocateFilePath(outDir, name, actualExt);
         // metadata 的宽高不含 EXIF 旋转，orientation 5~8 需互换；
         // 居中边距与内容尺寸都在摆正后的坐标系里，故这里取摆正尺寸
         const oriented = await orientedSize(filePath);
@@ -39,8 +41,13 @@ export async function processCenter(
         // 1. 探测主体内容 (Bounding Box)
         // 我们利用 trim() 的探测能力来寻找主体，但要在内存中拿到结果
         // 先 rotate() 摆正，探测出的偏移量才与后续 extract 处于同一坐标系
-        const probe = sharp(filePath).rotate().trim({ threshold: config.threshold });
-        const { info: probeInfo } = await probe.toBuffer({ resolveWithObject: true });
+        // 探测只需边界信息：raw() 输出的 info 同样带 trimOffsetLeft/Top 与裁后宽高，
+        // 省掉一次全图编码往返，避免大图批量处理时的 CPU 与内存峰值翻倍（见缺陷 4）
+        const { info: probeInfo } = await sharp(filePath)
+            .rotate()
+            .trim({ threshold: config.threshold })
+            .raw()
+            .toBuffer({ resolveWithObject: true });
 
         // probeInfo.trimOffsetLeft 和 trimOffsetTop 是负值，代表左侧和顶部被切掉的像素
         const contentLeft = Math.abs(probeInfo.trimOffsetLeft || 0);
@@ -111,8 +118,8 @@ export async function processCenter(
         await pipeline.toFile(outputPath);
         return { status: 'success', file: filePath };
     } catch (err: unknown) {
-        // 占位由本进程独占创建：失败时删同路径幽灵空文件，不碰目录
-        await fsp.unlink(outputPath).catch(() => {});
+        // 占位由本进程独占创建：失败时删同路径幽灵空文件，不碰目录；占位前失败则无文件可删
+        if (outputPath) await fsp.unlink(outputPath).catch(() => {});
         let errMsg = '未知错误';
         if (err instanceof Error) {
             errMsg = err.message;
