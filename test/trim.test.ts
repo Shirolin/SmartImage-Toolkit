@@ -72,6 +72,64 @@ describe('processTrimOrCrop - trim', () => {
         expect(meta.width!).toBeLessThanOrEqual(104);
         expect(meta.height).toBe(100);
     });
+    it('去除四周全透明边缘并保留内容像素', async () => {
+        const dir = trackedTempDir();
+        const src = path.join(dir, 'alpha-border.png');
+        const center = await sharp({
+            create: { width: 80, height: 60, channels: 4, background: { r: 220, g: 30, b: 30, alpha: 1 } }
+        })
+            .png()
+            .toBuffer();
+        await sharp(center)
+            .extend({ top: 30, bottom: 30, left: 30, right: 30, background: { r: 0, g: 0, b: 0, alpha: 0 } })
+            .png()
+            .toFile(src);
+
+        const result = await processTrimOrCrop(
+            src,
+            'trim',
+            { threshold: 10, sides: ['top', 'bottom', 'left', 'right'] },
+            null
+        );
+        expect(result.status).toBe('success');
+
+        const outPath = path.join(dir, 'trimmed', 'alpha-border.png');
+        expect(fs.existsSync(outPath)).toBe(true);
+        const meta = await sharp(outPath).metadata();
+        // 140x120 去掉各 30px 透明边 → 内容 80x60，容差与白边用例同口径
+        expect(meta.width!).toBeGreaterThanOrEqual(76);
+        expect(meta.width!).toBeLessThanOrEqual(84);
+        expect(meta.height!).toBeGreaterThanOrEqual(56);
+        expect(meta.height!).toBeLessThanOrEqual(64);
+        // 内容零损失：统一补齐 alpha 后与原中心逐字节一致
+        const outRaw = await sharp(outPath).ensureAlpha().raw().toBuffer();
+        const centerRaw = await sharp(center).ensureAlpha().raw().toBuffer();
+        expect(Buffer.compare(outRaw, centerRaw)).toBe(0);
+    });
+
+    it('全透明图不崩溃并原样落盘', async () => {
+        const dir = trackedTempDir();
+        const src = path.join(dir, 'full.png');
+        await sharp({
+            create: { width: 50, height: 40, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
+        })
+            .png()
+            .toFile(src);
+
+        const result = await processTrimOrCrop(
+            src,
+            'trim',
+            { threshold: 10, sides: ['top', 'bottom', 'left', 'right'] },
+            null
+        );
+        expect(result.status).toBe('success');
+
+        const outPath = path.join(dir, 'trimmed', 'full.png');
+        expect(fs.existsSync(outPath)).toBe(true);
+        const meta = await sharp(outPath).metadata();
+        expect(meta.width).toBe(50);
+        expect(meta.height).toBe(40);
+    });
 });
 
 describe('processTrimOrCrop - crop', () => {
@@ -149,5 +207,70 @@ describe('processTrimOrCrop EXIF 方向', () => {
         expect(meta.width!).toBeLessThanOrEqual(34);
         expect(meta.height!).toBeGreaterThanOrEqual(76);
         expect(meta.height!).toBeLessThanOrEqual(84);
+    });
+});
+
+describe('processTrimOrCrop - residue 报告', () => {
+    async function makeTransparentBordered(src: string): Promise<void> {
+        const center = await sharp({
+            create: { width: 80, height: 60, channels: 4, background: { r: 220, g: 30, b: 30, alpha: 1 } }
+        })
+            .png()
+            .toBuffer();
+        await sharp(center)
+            .extend({ top: 30, bottom: 30, left: 30, right: 30, background: { r: 0, g: 0, b: 0, alpha: 0 } })
+            .png()
+            .toFile(src);
+    }
+
+    it('透明均匀边报出四边切量与 uniform 分类', async () => {
+        const dir = trackedTempDir();
+        const src = path.join(dir, 'alpha-residue.png');
+        await makeTransparentBordered(src);
+
+        const result = await processTrimOrCrop(
+            src,
+            'trim',
+            { threshold: 10, sides: ['top', 'bottom', 'left', 'right'] },
+            null
+        );
+        expect(result.status).toBe('success');
+        expect(result.residue?.cuts).toEqual({ top: 30, bottom: 30, left: 30, right: 30 });
+        expect(result.residue?.kinds).toEqual({ top: 'uniform', bottom: 'uniform', left: 'uniform', right: 'uniform' });
+        expect(result.residue?.confidence).toBe(1);
+    });
+
+    it('全透明图切量为零且分类为 none', async () => {
+        const dir = trackedTempDir();
+        const src = path.join(dir, 'full-residue.png');
+        await sharp({
+            create: { width: 50, height: 40, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
+        })
+            .png()
+            .toFile(src);
+
+        const result = await processTrimOrCrop(
+            src,
+            'trim',
+            { threshold: 10, sides: ['top', 'bottom', 'left', 'right'] },
+            null
+        );
+        expect(result.status).toBe('success');
+        expect(result.residue?.cuts).toEqual({ top: 0, bottom: 0, left: 0, right: 0 });
+        expect(result.residue?.kinds).toEqual({ top: 'none', bottom: 'none', left: 'none', right: 'none' });
+        expect(result.residue?.confidence).toBe(1);
+    });
+
+    it('被 sides 滤掉的边切量为零但分类仍标注', async () => {
+        const dir = trackedTempDir();
+        const src = path.join(dir, 'alpha-kept.png');
+        await makeTransparentBordered(src);
+
+        const result = await processTrimOrCrop(src, 'trim', { threshold: 10, sides: ['left'] }, null);
+        expect(result.status).toBe('success');
+        // 实际只执行左边；top/bottom/right 是用户故意保留的残留，kinds 保持探测口径可见
+        expect(result.residue?.cuts).toEqual({ top: 0, bottom: 0, left: 30, right: 0 });
+        expect(result.residue?.kinds).toEqual({ top: 'uniform', bottom: 'uniform', left: 'uniform', right: 'uniform' });
+        expect(result.residue?.confidence).toBe(1);
     });
 });

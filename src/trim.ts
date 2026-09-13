@@ -9,9 +9,117 @@ import { orientedSize } from './shared/orientation';
 import { applyEncoding } from './shared/encode';
 import { normalizeExt } from './shared/formats';
 
-// 兼容旧名：统一复用共享操作结果类型
-export type TrimResult = OpResult;
+// trim 专属结果：成功时附带 residue 报告（实际切量 + 探测口径分类 + 置信度）
+// cuts 是 sides 过滤后实际执行的切除；kinds 走全量探测口径——被 sides 滤掉的边也会如实标注，方便发现“故意保留的残留”
+export type TrimSideKind = 'uniform' | 'feathered' | 'noisy' | 'content' | 'none';
+export interface TrimCuts {
+    top: number;
+    bottom: number;
+    left: number;
+    right: number;
+}
+export type TrimSideMap = Record<'top' | 'bottom' | 'left' | 'right', TrimSideKind>;
+export interface TrimResidue {
+    cuts: TrimCuts;
+    kinds: TrimSideMap;
+    confidence: number;
+}
+export interface TrimResult extends OpResult {
+    residue?: TrimResidue;
+}
 
+// 单边条带分类：bg 取全图左上角像素，alpha 一并计入距离
+function classifyStrip(
+    data: Buffer,
+    imgW: number,
+    x0: number,
+    y0: number,
+    w: number,
+    h: number,
+    bgR: number,
+    bgG: number,
+    bgB: number,
+    bgA: number,
+    tol: number
+): TrimSideKind {
+    if (w <= 0 || h <= 0) return 'none';
+    let similar = 0;
+    let partialAlpha = 0;
+    const total = w * h;
+    for (let y = y0; y < y0 + h; y++) {
+        const rowBase = y * imgW * 4;
+        for (let x = x0; x < x0 + w; x++) {
+            const i = rowBase + x * 4;
+            if (
+                Math.abs(data[i]! - bgR) <= tol &&
+                Math.abs(data[i + 1]! - bgG) <= tol &&
+                Math.abs(data[i + 2]! - bgB) <= tol &&
+                Math.abs(data[i + 3]! - bgA) <= tol
+            ) {
+                similar++;
+            }
+            const a = data[i + 3]!;
+            if (a > 0 && a < 255) partialAlpha++;
+        }
+    }
+    const similarFrac = similar / total;
+    if (similarFrac >= 0.98) return 'uniform';
+    if (similarFrac >= 0.9) return 'noisy';
+    if (partialAlpha / total >= 0.15) return 'feathered';
+    return 'content';
+}
+
+// residue 组装：单次 raw 解码摆正后的原图并逐边分类；调用方只在确实发生切除时进入
+async function buildTrimResidue(
+    filePath: string,
+    width: number,
+    height: number,
+    probeCuts: TrimCuts,
+    appliedCuts: TrimCuts,
+    threshold: number
+): Promise<TrimResidue> {
+    const { data, info } = await sharp(filePath).rotate().ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const w = info.width || width;
+    const h = info.height || height;
+    const bgR = data[0] ?? 0;
+    const bgG = data[1] ?? 0;
+    const bgB = data[2] ?? 0;
+    const bgA = data[3] ?? 0;
+    // 分类容差：复用用户 threshold（1-100）映射到 0-255 通道差
+    const tol = Math.max(1, Math.round(threshold * 2.55));
+    const kinds: TrimSideMap = { top: 'none', bottom: 'none', left: 'none', right: 'none' };
+    if (probeCuts.left > 0) kinds.left = classifyStrip(data, w, 0, 0, probeCuts.left, h, bgR, bgG, bgB, bgA, tol);
+    if (probeCuts.right > 0)
+        kinds.right = classifyStrip(data, w, w - probeCuts.right, 0, probeCuts.right, h, bgR, bgG, bgB, bgA, tol);
+    const midW = w - probeCuts.left - probeCuts.right;
+    if (probeCuts.top > 0)
+        kinds.top = classifyStrip(data, w, probeCuts.left, 0, midW, probeCuts.top, bgR, bgG, bgB, bgA, tol);
+    if (probeCuts.bottom > 0)
+        kinds.bottom = classifyStrip(
+            data,
+            w,
+            probeCuts.left,
+            h - probeCuts.bottom,
+            midW,
+            probeCuts.bottom,
+            bgR,
+            bgG,
+            bgB,
+            bgA,
+            tol
+        );
+    // 置信度只统计实际执行的边：羽化 -0.3/边、内容 -0.4/边、噪点 -0.1/边
+    let confidence = 1;
+    for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+        if (appliedCuts[side] <= 0) continue;
+        const k = kinds[side];
+        if (k === 'feathered') confidence -= 0.3;
+        else if (k === 'content') confidence -= 0.4;
+        else if (k === 'noisy') confidence -= 0.1;
+    }
+    confidence = Math.max(0, Math.round(confidence * 100) / 100);
+    return { cuts: { ...appliedCuts }, kinds, confidence };
+}
 export function processTrimOrCrop(
     filePath: string,
     action: 'trim',
@@ -54,6 +162,8 @@ export async function processTrimOrCrop(
         // rotate() 无参时按 EXIF Orientation 自动摆正，必须在 extract 之前应用，
         // 否则裁剪坐标与摆正后的探测结果不一致
         let sharpInstance = sharp(filePath).rotate();
+        // residue 报告载体：crop 分支保持缺席，trim 分支在下方赋值
+        let residue: TrimResidue | undefined;
 
         // 关键逻辑分支：trim vs crop（重载签名保证配对，in 守卫再收窄）
         if (action === 'trim') {
@@ -61,6 +171,11 @@ export async function processTrimOrCrop(
                 return { status: 'error', file: filePath, reason: 'trim 配置缺少 threshold。' };
             }
             const trimCfg = config;
+            residue = {
+                cuts: { top: 0, bottom: 0, left: 0, right: 0 },
+                kinds: { top: 'none', bottom: 'none', left: 'none', right: 'none' },
+                confidence: 1
+            };
 
             // --- 智能边向选择探底方案 ---
             // 隐式测试：仅在内存中执行全方位 Trim 看能切出什么边界
@@ -109,6 +224,15 @@ export async function processTrimOrCrop(
                         height: newHeight
                     });
                 }
+                // residue 报告：分析失败则保持缺席（未知不瞎报）；kinds 全量探测口径，cuts 只记实际执行
+                residue = await buildTrimResidue(
+                    filePath,
+                    originalW,
+                    originalH,
+                    { top: cutTop, bottom: cutBottom, left: cutLeft, right: cutRight },
+                    { top: finalTop, bottom: finalBottom, left: finalLeft, right: finalRight },
+                    trimCfg.threshold
+                ).catch(() => undefined);
             }
         } else {
             if (!('top' in config)) {
@@ -139,7 +263,7 @@ export async function processTrimOrCrop(
         sharpInstance = applyEncoding(sharpInstance, actualExt);
 
         await sharpInstance.toFile(outputPath);
-        return { status: 'success', file: filePath };
+        return { status: 'success', file: filePath, ...(residue ? { residue } : {}) };
     } catch (err: unknown) {
         // 占位由本进程独占创建：失败时删同路径幽灵空文件，不碰目录；早退前无占位则跳过
         if (outputPath) await fsp.unlink(outputPath).catch(() => {});
