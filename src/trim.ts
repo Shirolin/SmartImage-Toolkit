@@ -11,6 +11,7 @@ import { normalizeExt } from './shared/formats';
 
 // trim 专属结果：成功时附带 residue 报告（实际切量 + 探测口径分类 + 置信度）
 // cuts 是 sides 过滤后实际执行的切除；kinds 走全量探测口径——被 sides 滤掉的边也会如实标注，方便发现“故意保留的残留”
+// feathered/content 为防御分支：常规输入 probe 切除带恒自洽（只走 uniform/noisy），仅在探测与分类口径分歧时触发
 export type TrimSideKind = 'uniform' | 'feathered' | 'noisy' | 'content' | 'none';
 export interface TrimCuts {
     top: number;
@@ -50,15 +51,19 @@ function classifyStrip(
         const rowBase = y * imgW * 4;
         for (let x = x0; x < x0 + w; x++) {
             const i = rowBase + x * 4;
+            // 越界不可能（循环边界保证），?? 只是统一读取风格
+            const r = data[i] ?? bgR;
+            const g = data[i + 1] ?? bgG;
+            const b = data[i + 2] ?? bgB;
+            const a = data[i + 3] ?? bgA;
             if (
-                Math.abs(data[i]! - bgR) <= tol &&
-                Math.abs(data[i + 1]! - bgG) <= tol &&
-                Math.abs(data[i + 2]! - bgB) <= tol &&
-                Math.abs(data[i + 3]! - bgA) <= tol
+                Math.abs(r - bgR) <= tol &&
+                Math.abs(g - bgG) <= tol &&
+                Math.abs(b - bgB) <= tol &&
+                Math.abs(a - bgA) <= tol
             ) {
                 similar++;
             }
-            const a = data[i + 3]!;
             if (a > 0 && a < 255) partialAlpha++;
         }
     }

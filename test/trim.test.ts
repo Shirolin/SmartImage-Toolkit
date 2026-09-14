@@ -273,4 +273,52 @@ describe('processTrimOrCrop - residue 报告', () => {
         expect(result.residue?.kinds).toEqual({ top: 'uniform', bottom: 'uniform', left: 'uniform', right: 'uniform' });
         expect(result.residue?.confidence).toBe(1);
     });
+    it('噪点边报 noisy 且置信度扣分', async () => {
+        const dir = trackedTempDir();
+        const src = path.join(dir, 'noisy-residue.png');
+        // 中心 80x60 + 四周 30px 透明边，边内约 5% 不透明白点（确定性分布，相似度落进 noisy 区间）
+        const W = 140;
+        const H = 120;
+        const buf = Buffer.alloc(W * H * 4);
+        let n = 0;
+        for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+                const i = (y * W + x) * 4;
+                const inCenter = x >= 30 && x < 110 && y >= 30 && y < 90;
+                if (inCenter) {
+                    buf[i] = 220;
+                    buf[i + 1] = 30;
+                    buf[i + 2] = 30;
+                    buf[i + 3] = 255;
+                } else {
+                    buf[i] = 0;
+                    buf[i + 1] = 0;
+                    buf[i + 2] = 0;
+                    buf[i + 3] = 0;
+                    n++;
+                    if (n % 19 === 0) {
+                        buf[i] = 255;
+                        buf[i + 1] = 255;
+                        buf[i + 2] = 255;
+                        buf[i + 3] = 255;
+                    }
+                }
+            }
+        }
+        await sharp(buf, { raw: { width: W, height: H, channels: 4 } })
+            .png()
+            .toFile(src);
+
+        const result = await processTrimOrCrop(
+            src,
+            'trim',
+            { threshold: 10, sides: ['top', 'bottom', 'left', 'right'] },
+            null
+        );
+        expect(result.status).toBe('success');
+        expect(result.residue?.cuts).toEqual({ top: 30, bottom: 30, left: 30, right: 30 });
+        expect(result.residue?.kinds).toEqual({ top: 'noisy', bottom: 'noisy', left: 'noisy', right: 'noisy' });
+        // 四边 noisy 各扣 0.1，锁定置信度扣分路径
+        expect(result.residue?.confidence).toBe(0.6);
+    });
 });
