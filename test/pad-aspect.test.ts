@@ -201,6 +201,32 @@ describe('processPadAspect 几何', () => {
         expect(Math.abs(ratioH - 0.6)).toBeLessThanOrEqual(0.05);
     });
 
+    it('fillColor 字符串 transparent 与 fill:transparent 同效（center 交互习惯对齐）', async () => {
+        const dir = trackedTempDir();
+        const src = path.join(dir, 'char.png');
+        await createPng(src, 100, 100, { r: 220, g: 30, b: 30 });
+
+        const result = await processPadAspect(
+            src,
+            {
+                aspect: '1:1',
+                fill: 'color',
+                fillColor: 'transparent',
+                longEdge: 160,
+                subjectRatio: 0.5,
+                outputFormat: 'png'
+            },
+            '.png'
+        );
+        expect(result.status).toBe('success');
+        const { data } = await sharp(path.join(dir, 'pad-aspect', 'char.png'))
+            .ensureAlpha()
+            .raw()
+            .toBuffer({ resolveWithObject: true });
+        // 左上角全透
+        expect(data[3]).toBe(0);
+    });
+
     it('非法 aspect 返回 error 且不产生输出', async () => {
         const dir = trackedTempDir();
         const src = path.join(dir, 'char.png');

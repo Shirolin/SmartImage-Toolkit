@@ -965,9 +965,10 @@ export async function askCenterConfig(): Promise<CenterConfig | 'back'> {
     return centerConfig;
 }
 
-// 复用算子层色值解析做校验：'auto' 是独立菜单项而非色值，这里排除避免歧义
+// 复用算子层色值解析做校验：'auto' 是独立菜单项而非色值，这里排除避免歧义；
+// 'transparent' 合法（与 center.askCenterConfig 的输入宽容度一致，算子层有同名分流）
 function isValidFillColor(input: string): boolean {
-    return parseFillColorInput(input) !== null && input.toLowerCase() !== 'auto';
+    return input.toLowerCase() === 'transparent' || parseFillColorInput(input) !== null;
 }
 
 /** 画布扩边 / 比例对齐全流程采集（供图生视频预品，Feed Flow/Omni 前的画布与安全边距预处理） */
@@ -1075,8 +1076,8 @@ export async function askPadAspectConfig(): Promise<PadAspectConfig | 'back'> {
             validRatio = true;
             break;
         }
-        const parsed = parseFloat(ratioInput);
-        // 追加合法性：0~1 之间落在区间外就重问；负数/非数字同样被拒
+        const parsed = Number(ratioInput.trim());
+        // 与 askCount/askEdge 的严格口径一致：Number 拒绝 '0.6abc' 这类尾随垃圾，非法一律重问
         if (!isNaN(parsed) && parsed >= 0.4 && parsed <= 0.8) {
             subjectRatio = parsed;
             validRatio = true;
@@ -1088,7 +1089,7 @@ export async function askPadAspectConfig(): Promise<PadAspectConfig | 'back'> {
     let validLong = false;
     let longEdge = 1920;
     while (!validLong) {
-        const longInput = await askQuestion(chalk.gray('  ? 【画布长边像素】(上限 30000，默认回车 1920): '));
+        const longInput = await askQuestion(chalk.gray(`  ? 【画布长边像素】(上限 ${MAX_DIM}，默认回车 1920): `));
         if (longInput.trim() === '') {
             validLong = true;
             break;
@@ -1149,14 +1150,17 @@ export async function askPadAspectConfig(): Promise<PadAspectConfig | 'back'> {
     config.longEdge = longEdge;
 
     if (fillPick === 'custom') {
+        // 自定义入口也对齐 center 的宽容度：'transparent' 亦可（算子层有同名字符串分流），
         // 非法色值不能直接交给 sharp（会逐文件失败）：写进 config 前先校验并重问
         while (true) {
-            const input = (await askQuestion(chalk.gray('  ? 请输入十六进制色值码(如 #0088FF): '))).trim();
+            const input = (
+                await askQuestion(chalk.gray('  ? 请输入十六进制色值码(如 #0088FF)或 transparent: '))
+            ).trim();
             if (isValidFillColor(input)) {
                 config.fillColor = input;
                 break;
             }
-            console.log(chalk.red('❌ 无效的颜色。请输入 #RRGGBB 或 #RRGGBBAA 格式（如 #0088FF）。'));
+            console.log(chalk.red('❌ 无效的颜色。请输入 #RRGGBB / #RRGGBBAA（如 #0088FF）或 transparent。'));
         }
     } else {
         config.fillColor = fillPick; // '#FFFFFF' 或 'auto'

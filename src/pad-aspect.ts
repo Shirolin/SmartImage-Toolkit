@@ -41,7 +41,7 @@ export function parseFillColor(input: string): { r: number; g: number; b: number
     return { r, g, b, alpha };
 }
 
-/** fill=color 且 fillColor='auto' 时取源图一眼色像素（左上角）当底色：卫星初始化失败时回落纯白 */
+/** fill=color 且 fillColor='auto' 时取源图一眼色像素（左上角）当底色：角落全透时沿用其 alpha（等效透明填充）；失败时回落纯白 */
 async function pickCornerColor(filePath: string): Promise<{ r: number; g: number; b: number; alpha: number }> {
     try {
         const { data } = await sharp(filePath)
@@ -50,7 +50,7 @@ async function pickCornerColor(filePath: string): Promise<{ r: number; g: number
             .ensureAlpha()
             .raw()
             .toBuffer({ resolveWithObject: true });
-        return { r: data[0], g: data[1], b: data[2], alpha: 1 };
+        return { r: data[0], g: data[1], b: data[2], alpha: Math.round((data[3] / 255) * 100) / 100 };
     } catch {
         return { r: 255, g: 255, b: 255, alpha: 1 };
     }
@@ -111,11 +111,14 @@ export async function processPadAspect(
             };
         }
 
-        // 填充底色：transparent → 全透；color → 解析 fillColor（支持 auto 取源图边缘主色）
+        // 填充底色：transparent（fill 字段或 fillColor='transparent' 任一为真）→ 全透；
+        // color → 解析 fillColor（支持 auto 取源图边缘主色）。'transparent' 字符串分流是为了
+        // 与 center.fillColor: string | 'transparent' 的交互习惯对齐，省得用户两种问法得到不同结果；透明优先于色值
         let background: { r: number; g: number; b: number; alpha: number };
-        if (config.fill === 'transparent') {
+        const fillColorLower = (config.fillColor ?? '').toLowerCase();
+        if (config.fill === 'transparent' || fillColorLower === 'transparent') {
             background = { r: 0, g: 0, b: 0, alpha: 0 };
-        } else if (config.fillColor === 'auto') {
+        } else if (fillColorLower === 'auto') {
             background = await pickCornerColor(filePath);
         } else {
             const parsed = parseFillColor(config.fillColor ?? '#FFFFFF');

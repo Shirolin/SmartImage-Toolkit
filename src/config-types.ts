@@ -73,9 +73,9 @@ export interface PadAspectConfig {
     subjectRatio?: number;
     /** 主体来源：full_image 整图当主体（默认）；trim_bbox 复用 trim 阈值去纯色边后取 bbox */
     subjectMode?: 'full_image' | 'trim_bbox';
-    /** 空白填充：color 指定 fillColor；transparent 输出透明 */
+    /** 空白填充：color 指定 fillColor；transparent 输出透明（fillColor 字符串 'transparent' 同效） */
     fill: 'color' | 'transparent';
-    /** '#RRGGBB'、'#RRGGBBAA' 或 'auto'（取源图边缘主色）；fill=color 时必填 */
+    /** '#RRGGBB'、'#RRGGBBAA'、'auto'（取源图边缘主色）、'transparent'（同 fill）；fill=color 时必填 */
     fillColor?: string;
     /** 目标画布长边像素，封顶 MAX_DIM；默认 1920 */
     longEdge?: number;
