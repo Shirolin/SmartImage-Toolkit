@@ -8,7 +8,8 @@ import {
     askSplitConfig,
     askResizeConfig,
     askTrimCrop,
-    askCenterConfig
+    askCenterConfig,
+    askPadAspectConfig
 } from './prompts';
 import type { Choice } from './prompts';
 
@@ -25,6 +26,7 @@ export type {
     TrimConfig,
     CropConfig,
     CenterConfig,
+    PadAspectConfig,
     InteractiveResolution
 } from './config-types';
 
@@ -95,6 +97,14 @@ export async function askFormat(): Promise<InteractiveResolution> {
             value: 'center',
             titleColor: chalk.magenta.bold
         },
+        // 数字键 0~9 已分完：新功能顺延用字母键（customSelect 按键原文匹配，不区分大小写地按字面找）
+        {
+            key: 'a',
+            title: '画布扩边 (Pad Aspect)',
+            description: '换目标比例画布并缩小主体居中，供图生视频前预处理',
+            value: 'pad_aspect',
+            titleColor: chalk.blue.bold
+        },
         {
             key: '0',
             title: '退出程序',
@@ -146,6 +156,12 @@ export async function askFormat(): Promise<InteractiveResolution> {
             const centerConfig = await askCenterConfig();
             if (centerConfig === 'back') continue;
             return { format: 'center', centerConfig };
+        }
+
+        if (selectedFormat === 'pad_aspect') {
+            const padAspectConfig = await askPadAspectConfig();
+            if (padAspectConfig === 'back') continue;
+            return { format: 'pad_aspect', padAspectConfig };
         }
 
         console.clear();

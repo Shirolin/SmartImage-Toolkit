@@ -5,12 +5,22 @@ import chalk from 'chalk';
 
 import { getFiles } from './utils';
 import { askFormat, CancelError } from './cli';
-import type { TargetFormat, AiModel, SplitConfig, ResizeConfig, TrimConfig, CropConfig, CenterConfig } from './cli';
+import type {
+    TargetFormat,
+    AiModel,
+    SplitConfig,
+    ResizeConfig,
+    TrimConfig,
+    CropConfig,
+    CenterConfig,
+    PadAspectConfig
+} from './cli';
 import { convertImage } from './core';
 import { splitImage } from './split';
 import { resizeImage } from './resize';
 import { processTrimOrCrop } from './trim';
 import { processCenter } from './center';
+import { processPadAspect } from './pad-aspect';
 import { BATCH_SIZE, EXIT_CANCEL } from './shared/constants';
 import { resolveImageExt } from './shared/formats';
 
@@ -35,7 +45,8 @@ const KNOWN_FORMATS: readonly TargetFormat[] = [
     'resize',
     'trim',
     'crop',
-    'center'
+    'center',
+    'pad_aspect'
 ];
 
 function isTargetFormat(value: string): value is TargetFormat {
@@ -49,7 +60,9 @@ function isAiModel(value: string): value is AiModel {
 function printHelp(): void {
     console.log(chalk.cyan('\n用法: smart-image <图片/目录...> [选项]\n'));
     console.log(chalk.gray('  --interactive     进入交互模式（上下键选择特效方案）'));
-    console.log(chalk.gray('  --format <格式>   直接指定格式：webp/png/avif/mozjpeg/trim/center/...'));
+    console.log(
+        chalk.gray('  --format <格式>   直接指定格式：webp/png/avif/mozjpeg/trim/center/...（pad_aspect 需交互配置）')
+    );
     console.log(chalk.gray('  --ai-model <档位> AI 抠图精度：medium（默认）/ small'));
     console.log(chalk.gray('  --help, -h        显示本帮助并退出\n'));
 }
@@ -71,6 +84,7 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
     let trimConfig: TrimConfig | undefined;
     let cropConfig: CropConfig | undefined;
     let centerConfig: CenterConfig | undefined;
+    let padAspectConfig: PadAspectConfig | undefined;
 
     // 取值校验必须在摘除任何参数**之前**完成：否则 --ai-model --format webp x.png 里
     // --format 会先被摘掉，轮到 --ai-model 时它的下一个 token 变成图片路径并被静默吞掉。
@@ -161,6 +175,7 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
             if (resolution.trimConfig) trimConfig = resolution.trimConfig;
             if (resolution.cropConfig) cropConfig = resolution.cropConfig;
             if (resolution.centerConfig) centerConfig = resolution.centerConfig;
+            if (resolution.padAspectConfig) padAspectConfig = resolution.padAspectConfig;
         } catch (err: unknown) {
             // 用户取消：与「无参数/零产出」的 idle 不同语义，标记 canceled 由入口翻译成 EXIT_CANCEL，
             // 让 bat/脚本能区分「完成」与「取消」（此前两者都是退出码 0，故会出现「操作已取消」与 Done 同屏）
@@ -191,6 +206,11 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
     }
     if (format === 'crop' && !cropConfig) {
         throw new Error('❌ --format crop 需要裁剪参数：请使用 --interactive（或 run_interactive.bat）指定裁剪区域。');
+    }
+    if (format === 'pad_aspect' && !padAspectConfig) {
+        throw new Error(
+            '❌ --format pad_aspect 需要目标比例等参数：请使用 --interactive（或 run_interactive.bat）选择配置。'
+        );
     }
 
     console.log(chalk.cyan('\n====================================================================================='));
@@ -245,7 +265,9 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
                           ? chalk.yellow.bold(`[手动裁剪(Crop)]`)
                           : format === 'center'
                             ? chalk.magenta.bold(`[智能居中(Smart Center)]`)
-                            : chalk.green.bold(`[格式转换] -> ${format.toUpperCase()}`)
+                            : format === 'pad_aspect'
+                              ? chalk.blue.bold(`[画布扩边(Pad Aspect) -> ${padAspectConfig?.aspect}]`)
+                              : chalk.green.bold(`[格式转换] -> ${format.toUpperCase()}`)
             }。`
         )
     );
@@ -322,6 +344,12 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
                         centerOut === undefined || centerOut === 'original' ? null : resolveImageExt(centerOut, '.jpg');
                     const centerRes = await processCenter(file, centerConfig, centerExt);
                     return centerRes;
+                } else if (format === 'pad_aspect' && padAspectConfig) {
+                    const padOut = padAspectConfig.outputFormat;
+                    const padExt =
+                        padOut === undefined || padOut === 'original' ? null : resolveImageExt(padOut, '.jpg');
+                    const padRes = await processPadAspect(file, padAspectConfig, padExt);
+                    return padRes;
                 } else {
                     return await convertImage(file, format, coreSpinner, aiModelConfig);
                 }

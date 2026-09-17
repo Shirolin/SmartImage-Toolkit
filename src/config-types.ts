@@ -20,7 +20,8 @@ export type TargetFormat =
     | 'resize'
     | 'trim'
     | 'crop'
-    | 'center';
+    | 'center'
+    | 'pad_aspect';
 
 /** AI 抠图模型档位 */
 export type AiModel = 'medium' | 'small';
@@ -64,6 +65,25 @@ export interface CenterConfig {
     sides?: ('top' | 'bottom' | 'left' | 'right')[];
 }
 
+/** 画布扩边 / 比例对齐（pad-aspect）：换目标比例画布并把主体缩小居中，四周留动作安全边距 */
+export interface PadAspectConfig {
+    /** 目标比例 'W:H'，两个正整数（如 '16:9'）；非法值由交互重问，算子层报 error */
+    aspect: string;
+    /** 主体占画布高度的比例，0.40~0.80 */
+    subjectRatio?: number;
+    /** 主体来源：full_image 整图当主体（默认）；trim_bbox 复用 trim 阈值去纯色边后取 bbox */
+    subjectMode?: 'full_image' | 'trim_bbox';
+    /** 空白填充：color 指定 fillColor；transparent 输出透明 */
+    fill: 'color' | 'transparent';
+    /** '#RRGGBB'、'#RRGGBBAA' 或 'auto'（取源图边缘主色）；fill=color 时必填 */
+    fillColor?: string;
+    /** 目标画布长边像素，封顶 MAX_DIM；默认 1920 */
+    longEdge?: number;
+    /** trim_bbox 模式的 trim 容差，默认 10（与 center/trim 一致） */
+    threshold?: number;
+    outputFormat?: 'original' | 'webp' | 'png' | 'mozjpeg';
+}
+
 export interface InteractiveResolution {
     format: TargetFormat;
     aiModel?: AiModel;
@@ -72,4 +92,5 @@ export interface InteractiveResolution {
     trimConfig?: TrimConfig; // 针对智能去边操作附加参数
     cropConfig?: CropConfig; // 针对手动裁切操作附加参数
     centerConfig?: CenterConfig; // 针对智能居中操作附加参数
+    padAspectConfig?: PadAspectConfig; // 针对画布扩边/比例对齐操作附加参数
 }

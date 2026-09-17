@@ -2,7 +2,16 @@ import readline from 'readline';
 import chalk from 'chalk';
 import { MAX_DIM, MAX_PERCENT } from './shared/constants';
 import { CancelError } from './config-types';
-import type { AiModel, SplitConfig, ResizeConfig, TrimConfig, CropConfig, CenterConfig } from './config-types';
+import { parseAspect as parseAspectChoice, parseFillColor as parseFillColorInput } from './pad-aspect';
+import type {
+    AiModel,
+    SplitConfig,
+    ResizeConfig,
+    TrimConfig,
+    CropConfig,
+    CenterConfig,
+    PadAspectConfig
+} from './config-types';
 
 // 第一性原理：按键交互与渲染是可复用的表现层，流程编排（cli.ts）只做调度。
 // 本文件自 cli.ts 拆出：原 customSelect/renderHeader/askQuestion 逐行搬迁，
@@ -954,4 +963,230 @@ export async function askCenterConfig(): Promise<CenterConfig | 'back'> {
         outputFormat: finalFormatChoice === 'original' ? undefined : finalFormatChoice
     };
     return centerConfig;
+}
+
+// 复用算子层色值解析做校验：'auto' 是独立菜单项而非色值，这里排除避免歧义
+function isValidFillColor(input: string): boolean {
+    return parseFillColorInput(input) !== null && input.toLowerCase() !== 'auto';
+}
+
+/** 画布扩边 / 比例对齐全流程采集（供图生视频预品，Feed Flow/Omni 前的画布与安全边距预处理） */
+export async function askPadAspectConfig(): Promise<PadAspectConfig | 'back'> {
+    renderHeader('主界面 > 画布扩边 (Pad Aspect) (1/5) - 目标比例');
+    const aspectMessage = `${chalk.blue.bold('🖼️ 请选择目标画布比例 (长边默认 1080/1920)')}:\n${chalk.gray('  ? 目标比例:')}`;
+    const aspectChoices: Choice<'16:9' | '9:16' | '1:1' | 'custom' | 'back'>[] = [
+        {
+            key: '1',
+            title: '16:9',
+            description: '横屏视频 (1920×1080)',
+            value: '16:9',
+            titleColor: chalk.cyan.bold
+        },
+        {
+            key: '2',
+            title: '9:16',
+            description: '竖屏视频 (1080×1920)',
+            value: '9:16',
+            titleColor: chalk.cyan.bold
+        },
+        {
+            key: '3',
+            title: '1:1',
+            description: '正方形 (1920×1920)',
+            value: '1:1',
+            titleColor: chalk.cyan.bold
+        },
+        {
+            key: '4',
+            title: '自定义 W:H',
+            description: '输入如 4:5 两个正整数',
+            value: 'custom',
+            titleColor: chalk.magenta.bold
+        },
+        { key: '0', title: '返回主菜单', description: '已填参数将丢弃', value: 'back', titleColor: chalk.gray }
+    ];
+
+    const aspectChoice = await customSelect(aspectMessage, aspectChoices);
+    if (aspectChoice === 'back') return 'back';
+
+    let aspect: string = aspectChoice;
+    if (aspectChoice === 'custom') {
+        // 计算在算子层做，这里把值问对即可：非法一律重问，不静默回退
+        while (true) {
+            const input = (await askQuestion(chalk.cyan('  ? 【自定义比例】请输入 W:H (例如 4:5): '))).trim();
+            const parsed = parseAspectChoice(input);
+            if (parsed) {
+                aspect = `${parsed.w}:${parsed.h}`;
+                break;
+            }
+            console.log(chalk.red('❌ 无效的输入。请输入 W:H 格式的两个正整数（如 4:5、21:9）。'));
+        }
+    }
+
+    renderHeader(`主界面 > 画布扩边 (Pad Aspect) (2/5) - 主体模式 (${aspect})`);
+    const modeMessage = `${chalk.blue.bold('📐 主体如何界定？')}:\n${chalk.gray('  ? 主体模式:')}`;
+    const modeChoices: Choice<'full_image' | 'trim_bbox' | 'back'>[] = [
+        {
+            key: '1',
+            title: '整图当主体 (默认)',
+            description: '像素角色/纯色底最稳：整张图等比缩小',
+            value: 'full_image',
+            titleColor: chalk.green.bold
+        },
+        {
+            key: '2',
+            title: '探测主体边界 (Trim BBox)',
+            description: '先按容差去掉纯色边框，再对主体缩小',
+            value: 'trim_bbox',
+            titleColor: chalk.yellow
+        },
+        { key: '0', title: '返回主菜单', description: '已填参数将丢弃', value: 'back', titleColor: chalk.gray }
+    ];
+    const subjectMode = await customSelect(modeMessage, modeChoices);
+    if (subjectMode === 'back') return 'back';
+
+    let threshold: number | undefined;
+    if (subjectMode === 'trim_bbox') {
+        while (true) {
+            const thresholdInput = await askQuestion(
+                chalk.gray('  ? 【色差容忍度】用于探测纯色边 (1-100，默认回车 10): ')
+            );
+            if (thresholdInput.trim() === '') {
+                threshold = 10;
+                break;
+            }
+            const parsed = parseInt(thresholdInput, 10);
+            if (!isNaN(parsed) && parsed >= 1 && parsed <= 100) {
+                threshold = parsed;
+                break;
+            }
+            console.log(chalk.red('❌ 无效的输入。请输入 1-100 之间的整数。'));
+        }
+    }
+
+    renderHeader('主界面 > 画布扩边 (Pad Aspect) (3/5) - 主体占比与画布长边');
+    let validRatio = false;
+    let subjectRatio = 0.6;
+    while (!validRatio) {
+        const ratioInput = await askQuestion(
+            chalk.gray('  ? 【主体占画布高度比例】(0.40-0.80，默认回车 0.60，字面 0.4~0.8 也认): ')
+        );
+        if (ratioInput.trim() === '') {
+            validRatio = true;
+            break;
+        }
+        const parsed = parseFloat(ratioInput);
+        // 追加合法性：0~1 之间落在区间外就重问；负数/非数字同样被拒
+        if (!isNaN(parsed) && parsed >= 0.4 && parsed <= 0.8) {
+            subjectRatio = parsed;
+            validRatio = true;
+        } else {
+            console.log(chalk.red('❌ 无效的输入。请输入 0.40-0.80 之间的数字（例如 0.6）。'));
+        }
+    }
+
+    let validLong = false;
+    let longEdge = 1920;
+    while (!validLong) {
+        const longInput = await askQuestion(chalk.gray('  ? 【画布长边像素】(上限 30000，默认回车 1920): '));
+        if (longInput.trim() === '') {
+            validLong = true;
+            break;
+        }
+        const parsed = parseInt(longInput, 10);
+        if (!isNaN(parsed) && parsed >= 1 && parsed <= MAX_DIM) {
+            longEdge = parsed;
+            validLong = true;
+        } else {
+            console.log(chalk.red(`❌ 无效的输入。请输入 1-${MAX_DIM} 之间的整数。`));
+        }
+    }
+
+    renderHeader('主界面 > 画布扩边 (Pad Aspect) (4/5) - 填充背景');
+    const fillMessage = `${chalk.blue.bold('🎨 目标画布四周的空白用什么填充？')}:\n${chalk.gray('  ? 填充方式:')}`;
+    const fillChoices: Choice<'transparent' | '#FFFFFF' | 'custom' | 'auto' | 'back'>[] = [
+        {
+            key: '1',
+            title: '全透明 (Transparent)',
+            description: '输出 PNG/WebP 保留透明',
+            value: 'transparent',
+            titleColor: chalk.green
+        },
+        {
+            key: '2',
+            title: '纯白 (#FFFFFF)',
+            description: 'JPG 适用',
+            value: '#FFFFFF',
+            titleColor: chalk.white
+        },
+        {
+            key: '3',
+            title: '取图边缘主色 (Auto)',
+            description: '按源图一角像素自动补底色',
+            value: 'auto',
+            titleColor: chalk.cyan
+        },
+        {
+            key: '4',
+            title: '自定义 Hex 色值',
+            description: '手动输入如 #0088FF',
+            value: 'custom',
+            titleColor: chalk.blue
+        },
+        { key: '0', title: '返回主菜单', description: '已填参数将丢弃', value: 'back', titleColor: chalk.gray }
+    ];
+
+    const fillPick = await customSelect(fillMessage, fillChoices);
+    if (fillPick === 'back') return 'back';
+
+    const config: PadAspectConfig = {
+        aspect,
+        subjectRatio,
+        subjectMode,
+        fill: fillPick === 'transparent' ? 'transparent' : 'color'
+    };
+    if (subjectMode === 'trim_bbox' && threshold !== undefined) config.threshold = threshold;
+    config.longEdge = longEdge;
+
+    if (fillPick === 'custom') {
+        // 非法色值不能直接交给 sharp（会逐文件失败）：写进 config 前先校验并重问
+        while (true) {
+            const input = (await askQuestion(chalk.gray('  ? 请输入十六进制色值码(如 #0088FF): '))).trim();
+            if (isValidFillColor(input)) {
+                config.fillColor = input;
+                break;
+            }
+            console.log(chalk.red('❌ 无效的颜色。请输入 #RRGGBB 或 #RRGGBBAA 格式（如 #0088FF）。'));
+        }
+    } else {
+        config.fillColor = fillPick; // '#FFFFFF' 或 'auto'
+    }
+
+    renderHeader('主界面 > 画布扩边 (Pad Aspect) (5/5) - 最终输出格式');
+    const formatMessage = `${chalk.blue.bold('📦 请选择扩边后文件的最终导出格式')}:\n${chalk.gray('  ? 导出格式:')}`;
+    const formatChoicesPad: Choice<'original' | 'webp' | 'png' | 'mozjpeg' | 'back'>[] = [
+        {
+            key: '1',
+            title: '保持原格式 (默认)',
+            description: '沿用修改前文件的扩展名',
+            value: 'original',
+            titleColor: chalk.white
+        },
+        { key: '2', title: 'WebP', description: '体积最小，支持透明', value: 'webp', titleColor: chalk.green.bold },
+        { key: '3', title: 'PNG', description: '无损画质，保留透明', value: 'png', titleColor: chalk.green.bold },
+        {
+            key: '4',
+            title: 'JPG (MozJPEG)',
+            description: '透明将被烘焙为底色',
+            value: 'mozjpeg',
+            titleColor: chalk.green.bold
+        },
+        { key: '0', title: '返回主菜单', description: '已填参数将丢弃', value: 'back', titleColor: chalk.gray }
+    ];
+    const outFormat = await customSelect(formatMessage, formatChoicesPad);
+    if (outFormat === 'back') return 'back';
+    if (outFormat !== 'original') config.outputFormat = outFormat;
+
+    console.clear();
+    return config;
 }
