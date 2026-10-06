@@ -23,6 +23,24 @@ export type TargetFormat =
     | 'center'
     | 'pad_aspect';
 
+export const KNOWN_FORMATS: readonly TargetFormat[] = [
+    'webp',
+    'png',
+    'avif',
+    'mozjpeg',
+    'rmbg_solid',
+    'split',
+    'resize',
+    'trim',
+    'crop',
+    'center',
+    'pad_aspect'
+];
+
+export function isTargetFormat(value: string): value is TargetFormat {
+    return KNOWN_FORMATS.some((f) => f === value);
+}
+
 /** AI 抠图模型档位 */
 export type AiModel = 'medium' | 'small';
 

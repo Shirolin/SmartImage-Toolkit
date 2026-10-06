@@ -1,50 +1,24 @@
-import sharp from 'sharp';
-import path from 'path';
-import { promises as fsp } from 'fs';
-
-import { CenterConfig } from './cli';
+import type { CenterConfig } from './cli';
 import type { OpResult } from './shared/results';
-import { ensureDir, allocateFilePath } from './shared/output-naming';
-import { orientedSize } from './shared/orientation';
-import { applyEncoding } from './shared/encode';
-import { normalizeExt } from './shared/formats';
+import { defineOperator } from './shared/pipeline';
 
 // 兼容旧名：统一复用共享操作结果类型
 export type CenterResult = OpResult;
 
-export async function processCenter(
-    filePath: string,
-    config: CenterConfig,
-    formatExt: string | null
-): Promise<CenterResult> {
-    const dir = path.dirname(filePath);
-    const ext = path.extname(filePath);
-    const name = path.basename(filePath, ext);
-
-    // 输出扩展名归一化（小写；.jpeg→.jpg），未知格式原样透传
-    const actualExt = normalizeExt(formatExt || ext);
-    // 占位路径外置声明：建目录/占位已移入 try，异常时统一转成 error 返回
-    let outputPath = '';
-
-    try {
-        // 建目录与独占占位都必须在 try 内：目录不可写/路径过长/磁盘满时异常要折成 OpResult，
-        // 不能让 reject 逃出契约（见缺陷 3）
-        const outDir = path.join(dir, 'centered');
-        await ensureDir(outDir);
-        outputPath = await allocateFilePath(outDir, name, actualExt);
-        // metadata 的宽高不含 EXIF 旋转，orientation 5~8 需互换；
-        // 居中边距与内容尺寸都在摆正后的坐标系里，故这里取摆正尺寸
-        const oriented = await orientedSize(filePath);
+/**
+ * 智能居中算子：探测主体位置并平衡边距，使内容居中
+ * I/O、独占占位、EXIF 摆正与异常回滚已下沉至 shared/pipeline
+ */
+export const processCenter = defineOperator<CenterConfig>({
+    destination: { subDir: 'centered' },
+    transform: async ({ sharp, oriented, config }) => {
         const originalW = oriented.width;
         const originalH = oriented.height;
 
         // 1. 探测主体内容 (Bounding Box)
-        // 我们利用 trim() 的探测能力来寻找主体，但要在内存中拿到结果
-        // 先 rotate() 摆正，探测出的偏移量才与后续 extract 处于同一坐标系
-        // 探测只需边界信息：raw() 输出的 info 同样带 trimOffsetLeft/Top 与裁后宽高，
-        // 省掉一次全图编码往返，避免大图批量处理时的 CPU 与内存峰值翻倍（见缺陷 4）
-        const { info: probeInfo } = await sharp(filePath)
-            .rotate()
+        // 利用克隆的已摆正管道做 raw 探测，避免多余全图编解码开销
+        const { info: probeInfo } = await sharp
+            .clone()
             .trim({ threshold: config.threshold })
             .raw()
             .toBuffer({ resolveWithObject: true });
@@ -54,8 +28,6 @@ export async function processCenter(
         const contentTop = Math.abs(probeInfo.trimOffsetTop || 0);
         const contentW = probeInfo.width;
         const contentH = probeInfo.height;
-
-        // 探测出内容即全图时无需特殊处理，直接走统一居中流水线
 
         // 2. 计算轴向总可用边距 (Total Margins)
         const totalHorizontalMargin = originalW - contentW;
@@ -68,8 +40,6 @@ export async function processCenter(
         const hasRight = allowedSides.includes('right');
 
         // 3. 应用轴向分配逻辑 (Alignment Distribution)
-        // 核心逻辑：不选哪边，哪边不留白。选了哪边，哪边承接边距。
-        // 若对向均选，则平分（居中）；若均不选，则画布收缩至内容尺寸。
         const padding = {
             top: 0,
             bottom: 0,
@@ -97,10 +67,9 @@ export async function processCenter(
             padding.right = totalHorizontalMargin;
         }
 
-        // 4. 构建处理流水线
-        // 与探测保持一致：先 rotate() 摆正，再按摆正坐标系 extract/extend
-        let pipeline = sharp(filePath)
-            .rotate()
+        // 4. 构建并返回变换后 Sharp 管道（编码与落盘由流水线托管）
+        return sharp
+            .clone()
             .extract({
                 left: contentLeft,
                 top: contentTop,
@@ -111,19 +80,5 @@ export async function processCenter(
                 ...padding,
                 background: config.fillColor === 'transparent' ? { r: 0, g: 0, b: 0, alpha: 0 } : config.fillColor
             });
-
-        // 统一编码后落盘（未知扩展原样透传）
-        pipeline = applyEncoding(pipeline, actualExt);
-
-        await pipeline.toFile(outputPath);
-        return { status: 'success', file: filePath };
-    } catch (err: unknown) {
-        // 占位由本进程独占创建：失败时删同路径幽灵空文件，不碰目录；占位前失败则无文件可删
-        if (outputPath) await fsp.unlink(outputPath).catch(() => {});
-        let errMsg = '未知错误';
-        if (err instanceof Error) {
-            errMsg = err.message;
-        }
-        return { status: 'error', file: filePath, reason: errMsg };
     }
-}
+});

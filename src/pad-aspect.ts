@@ -1,13 +1,8 @@
 import sharp from 'sharp';
-import path from 'path';
-import { promises as fsp } from 'fs';
 
 import type { PadAspectConfig } from './config-types';
 import type { OpResult } from './shared/results';
-import { ensureDir, allocateFilePath } from './shared/output-naming';
-import { orientedSize } from './shared/orientation';
-import { applyEncoding } from './shared/encode';
-import { normalizeExt } from './shared/formats';
+import { defineOperator } from './shared/pipeline';
 import { MAX_DIM, TRIM_THRESHOLD_DEFAULT } from './shared/constants';
 
 // 画布扩边 / 比例对齐引擎：与 center 不同处在于这里是「换画布」——按目标比例新建画布，
@@ -15,6 +10,7 @@ import { MAX_DIM, TRIM_THRESHOLD_DEFAULT } from './shared/constants';
 // 几何全程整数像素；合成走单一抽象：sharp create 造底 + composite 贴缩放后主体，
 // 不与 extend+resize 路径混用。缩放用 fit:'fill' 的显式宽高——比例是我们逐项算好的整数，
 // 不需要 sharp 再做包含/裁剪推断。
+// I/O、独占占位、EXIF 摆正与异常回滚已下沉至 shared/pipeline
 
 export type PadAspectResult = OpResult;
 
@@ -42,10 +38,10 @@ export function parseFillColor(input: string): { r: number; g: number; b: number
 }
 
 /** fill=color 且 fillColor='auto' 时取源图一眼色像素（左上角）当底色：角落全透时沿用其 alpha（等效透明填充）；失败时回落纯白 */
-async function pickCornerColor(filePath: string): Promise<{ r: number; g: number; b: number; alpha: number }> {
+async function pickCornerColor(baseSharp: sharp.Sharp): Promise<{ r: number; g: number; b: number; alpha: number }> {
     try {
-        const { data } = await sharp(filePath)
-            .rotate()
+        const { data } = await baseSharp
+            .clone()
             .extract({ left: 0, top: 0, width: 1, height: 1 })
             .ensureAlpha()
             .raw()
@@ -56,36 +52,27 @@ async function pickCornerColor(filePath: string): Promise<{ r: number; g: number
     }
 }
 
-export async function processPadAspect(
-    filePath: string,
-    config: PadAspectConfig,
-    formatExt: string | null
-): Promise<PadAspectResult> {
-    const dir = path.dirname(filePath);
-    const ext = path.extname(filePath);
-    const name = path.basename(filePath, ext);
-
-    const actualExt = normalizeExt(formatExt || ext);
-    let outputPath = '';
-
-    try {
+/**
+ * 画布扩边算子实现
+ */
+export const processPadAspect = defineOperator<PadAspectConfig>({
+    destination: { subDir: 'pad-aspect' },
+    transform: async ({ sharp: baseSharp, oriented, config }) => {
         const dims = parseAspect(config.aspect);
         if (!dims) {
             return {
-                status: 'error',
-                file: filePath,
-                reason: `无效的目标比例: ${config.aspect}，应为 W:H 两个正整数。`
+                error: `无效的目标比例: ${config.aspect}，应为 W:H 两个正整数。`
             };
         }
 
         const subjectRatio = config.subjectRatio ?? 0.6;
         if (subjectRatio < 0.4 || subjectRatio > 0.8) {
-            return { status: 'error', file: filePath, reason: `主体占比超范围: ${subjectRatio}，应在 0.40~0.80。` };
+            return { error: `主体占比超范围: ${subjectRatio}，应在 0.40~0.80。` };
         }
 
         const longEdge = Math.round(config.longEdge ?? 1920);
         if (longEdge < 1 || longEdge > MAX_DIM) {
-            return { status: 'error', file: filePath, reason: `画布长边超限: ${longEdge}，应在 1~${MAX_DIM}。` };
+            return { error: `画布长边超限: ${longEdge}，应在 1~${MAX_DIM}。` };
         }
 
         // 目标画布：长边贴 longEdge，另一边按比例折算；统一向下取整到偶数
@@ -99,15 +86,13 @@ export async function processPadAspect(
             canvasW = Math.round((longEdge * dims.w) / dims.h);
         }
         if (canvasW < 1 || canvasH < 1) {
-            return { status: 'error', file: filePath, reason: '目标画布尺寸过小，请调整比例或长边。' };
+            return { error: '目标画布尺寸过小，请调整比例或长边。' };
         }
         canvasW -= canvasW % 2;
         canvasH -= canvasH % 2;
         if (canvasW > MAX_DIM || canvasH > MAX_DIM) {
             return {
-                status: 'error',
-                file: filePath,
-                reason: `目标画布超限: ${canvasW}x${canvasH}，单边最大 ${MAX_DIM}px。`
+                error: `目标画布超限: ${canvasW}x${canvasH}，单边最大 ${MAX_DIM}px。`
             };
         }
 
@@ -119,14 +104,12 @@ export async function processPadAspect(
         if (config.fill === 'transparent' || fillColorLower === 'transparent') {
             background = { r: 0, g: 0, b: 0, alpha: 0 };
         } else if (fillColorLower === 'auto') {
-            background = await pickCornerColor(filePath);
+            background = await pickCornerColor(baseSharp);
         } else {
             const parsed = parseFillColor(config.fillColor ?? '#FFFFFF');
             if (!parsed) {
                 return {
-                    status: 'error',
-                    file: filePath,
-                    reason: `无效的填充色: ${config.fillColor}，应为 #RRGGBB(AA)。`
+                    error: `无效的填充色: ${config.fillColor}，应为 #RRGGBB(AA)。`
                 };
             }
             background = parsed;
@@ -139,9 +122,9 @@ export async function processPadAspect(
         let rawH: number;
 
         if (subjectMode === 'trim_bbox') {
-            // 探测与最终 extract 同样先 rotate()，坐标系才一致（同 center/trim 的既有口径）
-            const { info: probeInfo } = await sharp(filePath)
-                .rotate()
+            // 探测与最终 extract 基于已 rotate 管道，坐标系一致
+            const { info: probeInfo } = await baseSharp
+                .clone()
                 .trim({ threshold: config.threshold ?? TRIM_THRESHOLD_DEFAULT })
                 .raw()
                 .toBuffer({ resolveWithObject: true });
@@ -150,23 +133,22 @@ export async function processPadAspect(
             rawW = probeInfo.width;
             rawH = probeInfo.height;
             if (rawW < 1 || rawH < 1) {
-                return { status: 'error', file: filePath, reason: '主体探测结果为空，请增大容差或改用整图模式。' };
+                return { error: '主体探测结果为空，请增大容差或改用整图模式。' };
             }
-            subject = sharp(filePath).rotate().extract({
+            subject = baseSharp.clone().extract({
                 left: trimLeft,
                 top: trimTop,
                 width: rawW,
                 height: rawH
             });
         } else {
-            const oriented = await orientedSize(filePath);
             rawW = oriented.width;
             rawH = oriented.height;
-            subject = sharp(filePath).rotate();
+            subject = baseSharp.clone();
         }
 
         if (rawW < 1 || rawH < 1) {
-            return { status: 'error', file: filePath, reason: '无法读取图片元数据(宽高)' };
+            return { error: '无法读取图片元数据(宽高)' };
         }
 
         // 等比缩放：主体高度 = 画布高 × subjectRatio；宽度因此超过画布 95% 时改为按宽限高，仍保持等比
@@ -183,8 +165,8 @@ export async function processPadAspect(
             .png()
             .toBuffer();
 
-        // 造画布 + 居中合成 → 统一编码落盘
-        const canvas = sharp({
+        // 造画布 + 居中合成 → 返回 Sharp 管道由流水线统一编码落盘
+        return sharp({
             create: { width: canvasW, height: canvasH, channels: 4, background }
         }).composite([
             {
@@ -193,18 +175,5 @@ export async function processPadAspect(
                 top: Math.floor((canvasH - subjectH) / 2)
             }
         ]);
-
-        await ensureDir(path.join(dir, 'pad-aspect'));
-        outputPath = await allocateFilePath(path.join(dir, 'pad-aspect'), name, actualExt);
-        await applyEncoding(canvas, actualExt).toFile(outputPath);
-        return { status: 'success', file: filePath };
-    } catch (err: unknown) {
-        // 占位由本进程独占创建：失败时删同路径幽灵空文件，不碰目录
-        if (outputPath) await fsp.unlink(outputPath).catch(() => {});
-        let errMsg = '未知错误';
-        if (err instanceof Error) {
-            errMsg = err.message;
-        }
-        return { status: 'error', file: filePath, reason: errMsg };
     }
-}
+});
