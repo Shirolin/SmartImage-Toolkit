@@ -1,23 +1,23 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { Readable, Writable } from 'stream';
 import type { Choice } from '../src/prompts';
-import { askQuestion, askResizeConfig, askSplitConfig, customSelect } from '../src/prompts';
+import {
+    AnsiTerminalDriver,
+    ScriptedPromptDriver,
+    askAiModel,
+    askCenterConfig,
+    askPadAspectConfig,
+    askResizeConfig,
+    askSplitConfig,
+    askTrimCrop
+} from '../src/prompts';
 import { CancelError } from '../src/config-types';
-
-/**
- * prompts.ts 的交互采集直接读写 process.stdin / process.stdout。
- * 这里用非 TTY 的伪流替换两者：既能脱离真实终端确定地驱动流程，也不会把菜单渲染刷进测试输出。
- * 答案必须等对应提示写出之后再喂——readline 会把提前到达的行缓冲起来，
- * 而菜单按键只能在菜单自己的 keypress 监听期间送达，提前送入会落到别的提问上。
- */
 
 class FakeStdin extends Readable {
     isTTY = false;
     private ended = false;
 
-    _read(): void {
-        // 数据全部由用例通过 feed / eof 主动推入
-    }
+    _read(): void {}
 
     feed(data: string): void {
         this.push(Buffer.from(data, 'utf8'));
@@ -32,183 +32,238 @@ class FakeStdin extends Readable {
 
 class FakeStdout extends Writable {
     isTTY = false;
-    columns = 80;
-    rows = 24;
-    onWrite: ((text: string) => void) | null = null;
-
-    _write(chunk: Buffer | string, _encoding: BufferEncoding, done: (err?: Error | null) => void): void {
-        this.onWrite?.(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
+    _write(_chunk: Buffer | string, _encoding: BufferEncoding, done: (err?: Error | null) => void): void {
         done();
     }
 }
 
-interface Step {
-    /** 该步对应的提示文案：stdout 中出现即认为交互已推进到该提问 */
-    prompt: string;
-    /** 答案：带换行按整行回答（askQuestion），不带换行按单键选择（customSelect） */
-    reply: string;
-}
-
-class FakeSession {
-    readonly stdin = new FakeStdin();
-    readonly stdout = new FakeStdout();
-    private readonly steps: Step[];
-    private cursor = 0;
-    private pending = '';
-    private readonly stdinDescriptor: PropertyDescriptor;
-    private readonly stdoutDescriptor: PropertyDescriptor;
-
-    constructor(steps: Step[]) {
-        this.steps = steps;
-        this.stdinDescriptor = Object.getOwnPropertyDescriptor(process, 'stdin')!;
-        this.stdoutDescriptor = Object.getOwnPropertyDescriptor(process, 'stdout')!;
-    }
-
-    install(): this {
-        Object.defineProperty(process, 'stdin', { value: this.stdin, configurable: true });
-        Object.defineProperty(process, 'stdout', { value: this.stdout, configurable: true });
-        this.stdout.onWrite = (text) => this.advance(text);
-        return this;
-    }
-
-    /** 已命中的脚本步数：等于脚本长度时才说明流程在每个交互点都按预期推进（如非法值确实被重问） */
-    get consumed(): number {
-        return this.cursor;
-    }
-
-    restore(): void {
-        // 结束 stdin 以释放可能仍挂着的会话级 readline 单例，避免残留 reader 串到下一个用例
-        this.stdin.eof();
-        this.stdout.onWrite = null;
-        Object.defineProperty(process, 'stdin', this.stdinDescriptor);
-        Object.defineProperty(process, 'stdout', this.stdoutDescriptor);
-    }
-
-    private advance(text: string): void {
-        const step = this.steps[this.cursor];
-        if (!step) return;
-        this.pending += text;
-        if (!this.pending.includes(step.prompt)) return;
-        this.pending = '';
-        this.cursor++;
-        // 延后一拍再喂：提问方挂载监听与读取缓冲都发生在本次输出之后
-        setImmediate(() => this.stdin.feed(step.reply));
-    }
-}
-
-describe('prompts 交互采集', () => {
-    let session: FakeSession | null = null;
-
-    afterEach(async () => {
-        session?.restore();
-        session = null;
-        // 让出一个事件循环回合（非计时等待）：等 readline 的 close 事件落地，
-        // 模块单例 reader 必须确认已释放，否则会污染后续用例
-        await new Promise<void>((resolve) => setImmediate(resolve));
-    });
-
-    function script(steps: Step[]): FakeSession {
-        session = new FakeSession(steps).install();
-        return session;
-    }
-
+describe('AnsiTerminalDriver (生产终端驱动)', () => {
     it('stdin 直接结束时提问抛 CancelError，而不是返回空串或悬置', async () => {
-        script([]);
+        const stdin = new FakeStdin();
+        const stdout = new FakeStdout();
+        const driver = new AnsiTerminalDriver(stdin, stdout);
 
-        const pending = askQuestion('请输入内容: ');
-        session!.stdin.eof();
+        const pending = driver.question('请输入内容: ');
+        stdin.eof();
 
         await expect(pending).rejects.toBeInstanceOf(CancelError);
     });
 
     it('管道 EOF 时菜单选择抛 CancelError，而不是永久挂起', async () => {
-        script([]);
-        const choices: Choice<'a'>[] = [
-            { key: '1', title: '选项', description: '说明', value: 'a', titleColor: (t) => t }
-        ];
+        const stdin = new FakeStdin();
+        const stdout = new FakeStdout();
+        const driver = new AnsiTerminalDriver(stdin, stdout);
 
-        const pending = customSelect('请选择: ', choices);
-        session!.stdin.eof();
+        const choices: Choice<'a'>[] = [{ key: '1', title: '选项', description: '说明', value: 'a' }];
+
+        const pending = driver.select('请选择: ', choices);
+        stdin.eof();
 
         await expect(pending).rejects.toBeInstanceOf(CancelError);
     });
 
     it('同一批预写的多行答案可依次回答多个提问', async () => {
-        // 一次写入两行：修复前首个提问关闭 readline 时会丢掉后续行，第二问只能等到 EOF
-        const s = script([{ prompt: '第一问', reply: 'alpha\nbeta\n' }]);
+        const stdin = new FakeStdin();
+        const stdout = new FakeStdout();
+        const driver = new AnsiTerminalDriver(stdin, stdout);
 
-        const first = await askQuestion('第一问: ');
-        const second = await askQuestion('第二问: ');
+        stdin.feed('alpha\nbeta\n');
+
+        const first = await driver.question('第一问: ');
+        const second = await driver.question('第二问: ');
 
         expect(first).toBe('alpha');
         expect(second).toBe('beta');
-        s.stdin.eof();
+        stdin.eof();
     });
+});
 
+describe('ScriptedPromptDriver 与向导工作流 (纯内存测试)', () => {
     it('缩放宽度超过 MAX_DIM 被拒绝并重问，合法值才进入配置', async () => {
-        const s = script([
+        const driver = new ScriptedPromptDriver([
             { prompt: '请选择批量缩放的基准模式', reply: '1' },
-            { prompt: '【目标宽度】', reply: '99999\n' },
-            { prompt: '【目标宽度】', reply: '800\n' },
+            { prompt: '【目标宽度】', reply: '99999' },
+            { prompt: '【目标宽度】', reply: '800' },
             { prompt: '请选择缩放后文件的最终导出格式', reply: '1' }
         ]);
 
-        const config = await askResizeConfig();
+        const config = await askResizeConfig(driver);
 
         expect(config).toMatchObject({ mode: 'by_width', width: 800, outputFormat: 'original' });
-        expect(s.consumed).toBe(4);
+        expect(driver.consumed).toBe(4);
     });
 
     it('缩放百分比超过 MAX_PERCENT 被拒绝并重问，合法值才进入配置', async () => {
-        const s = script([
+        const driver = new ScriptedPromptDriver([
             { prompt: '请选择批量缩放的基准模式', reply: '3' },
-            { prompt: '【缩放百分比】', reply: '5000\n' },
-            { prompt: '【缩放百分比】', reply: '50\n' },
+            { prompt: '【缩放百分比】', reply: '5000' },
+            { prompt: '【缩放百分比】', reply: '50' },
             { prompt: '请选择缩放后文件的最终导出格式', reply: '1' }
         ]);
 
-        const config = await askResizeConfig();
+        const config = await askResizeConfig(driver);
 
         expect(config).toMatchObject({ mode: 'by_percent', percent: 50 });
-        expect(s.consumed).toBe(4);
+        expect(driver.consumed).toBe(4);
     });
 
     it('缩放自定义模式的适配策略菜单含 0 号返回项', async () => {
-        const s = script([
+        const driver = new ScriptedPromptDriver([
             { prompt: '请选择批量缩放的基准模式', reply: '4' },
-            { prompt: '【目标宽度】', reply: '800\n' },
-            { prompt: '【目标高度】', reply: '600\n' },
+            { prompt: '【目标宽度】', reply: '800' },
+            { prompt: '【目标高度】', reply: '600' },
             { prompt: '适配策略', reply: '0' }
         ]);
 
-        await expect(askResizeConfig()).resolves.toBe('back');
-        expect(s.consumed).toBe(4);
+        await expect(askResizeConfig(driver)).resolves.toBe('back');
+        expect(driver.consumed).toBe(4);
     });
 
     it('切片边缘去噪菜单含 0 号返回项', async () => {
-        // 先选「居中-正方形」才会经过边缘去噪这一步
-        const s = script([
-            { prompt: '【列数】', reply: '2\n' },
-            { prompt: '【行数】', reply: '2\n' },
+        const driver = new ScriptedPromptDriver([
+            { prompt: '【列数】', reply: '2' },
+            { prompt: '【行数】', reply: '2' },
             { prompt: '切片文件的最终导出格式', reply: '1' },
             { prompt: '是否对切片进行智能居中', reply: '3' },
             { prompt: '边缘去噪保护', reply: '0' }
         ]);
 
-        await expect(askSplitConfig()).resolves.toBe('back');
-        expect(s.consumed).toBe(5);
+        await expect(askSplitConfig(driver)).resolves.toBe('back');
+        expect(driver.consumed).toBe(5);
     });
 
     it('切片辅助对齐网格菜单含 0 号返回项', async () => {
-        const s = script([
-            { prompt: '【列数】', reply: '2\n' },
-            { prompt: '【行数】', reply: '2\n' },
+        const driver = new ScriptedPromptDriver([
+            { prompt: '【列数】', reply: '2' },
+            { prompt: '【行数】', reply: '2' },
             { prompt: '切片文件的最终导出格式', reply: '1' },
             { prompt: '是否对切片进行智能居中', reply: '1' },
             { prompt: '附带生成辅助对齐网格', reply: '0' }
         ]);
 
-        await expect(askSplitConfig()).resolves.toBe('back');
-        expect(s.consumed).toBe(5);
+        await expect(askSplitConfig(driver)).resolves.toBe('back');
+        expect(driver.consumed).toBe(5);
+    });
+
+    it('切片正常流程完整搜集配置参数', async () => {
+        const driver = new ScriptedPromptDriver([
+            { prompt: '【列数】', reply: '3' },
+            { prompt: '【行数】', reply: '4' },
+            { prompt: '切片文件的最终导出格式', reply: '2' }, // png
+            { prompt: '是否对切片进行智能居中', reply: '2' }, // keep_ratio
+            { prompt: '边缘去噪保护', reply: '2' }, // 2 px
+            { prompt: '附带生成辅助对齐网格', reply: '2' } // true
+        ]);
+
+        const result = await askSplitConfig(driver);
+        expect(result).toEqual({
+            cols: 3,
+            rows: 4,
+            exportFormat: 'png',
+            centerMode: 'keep_ratio',
+            edgeShave: 2,
+            debugGrid: true
+        });
+        expect(driver.isExhausted).toBe(true);
+    });
+
+    it('自动修剪 (Trim) 正常采集容差与方向', async () => {
+        const driver = new ScriptedPromptDriver([
+            { prompt: '修剪模式', reply: '1' }, // auto
+            { prompt: '修剪方向', reply: '1' }, // all 4 sides
+            { prompt: '色差容忍度', reply: '15' },
+            { prompt: '导出格式', reply: '2' } // webp
+        ]);
+
+        const result = await askTrimCrop(driver);
+        expect(result).toEqual({
+            kind: 'trim',
+            trimConfig: {
+                sides: ['top', 'bottom', 'left', 'right'],
+                threshold: 15,
+                outputFormat: 'webp'
+            }
+        });
+    });
+
+    it('手动裁剪 (Crop) 拦截全 0 边界并在合法值后放行', async () => {
+        const driver = new ScriptedPromptDriver([
+            { prompt: '修剪模式', reply: '2' }, // manual
+            { prompt: '顶部', reply: '0' },
+            { prompt: '底部', reply: '0' },
+            { prompt: '左部', reply: '0' },
+            { prompt: '右部', reply: '0' }, // 全 0 被拒绝重试
+            { prompt: '顶部', reply: '10' },
+            { prompt: '底部', reply: '0' },
+            { prompt: '左部', reply: '5' },
+            { prompt: '右部', reply: '0' },
+            { prompt: '导出格式', reply: '3' } // png
+        ]);
+
+        const result = await askTrimCrop(driver);
+        expect(result).toEqual({
+            kind: 'crop',
+            cropConfig: {
+                top: 10,
+                bottom: 0,
+                left: 5,
+                right: 0,
+                outputFormat: 'png'
+            }
+        });
+    });
+
+    it('智能居中 (Center) 正常采集容差与背景色', async () => {
+        const driver = new ScriptedPromptDriver([
+            { prompt: '色差容忍度', reply: '20' },
+            { prompt: '补白颜色', reply: '2' }, // #FFFFFF
+            { prompt: '导出格式', reply: '3' } // png
+        ]);
+
+        const result = await askCenterConfig(driver);
+        expect(result).toEqual({
+            threshold: 20,
+            fillColor: '#FFFFFF',
+            outputFormat: 'png'
+        });
+    });
+
+    it('画布扩边 (Pad Aspect) 支持自定义比例与自定义颜色', async () => {
+        const driver = new ScriptedPromptDriver([
+            { prompt: '目标比例', reply: '4' }, // custom
+            { prompt: '自定义比例', reply: '4:5' },
+            { prompt: '主体模式', reply: '1' }, // full_image
+            { prompt: '主体占画布高度比例', reply: '0.75' },
+            { prompt: '画布长边像素', reply: '1080' },
+            { prompt: '填充方式', reply: '4' }, // custom hex
+            { prompt: '十六进制色值码', reply: '#112233' },
+            { prompt: '导出格式', reply: '2' } // webp
+        ]);
+
+        const result = await askPadAspectConfig(driver);
+        expect(result).toEqual({
+            aspect: '4:5',
+            subjectRatio: 0.75,
+            subjectMode: 'full_image',
+            fill: 'color',
+            fillColor: '#112233',
+            longEdge: 1080,
+            outputFormat: 'webp'
+        });
+    });
+
+    it('AI 抠图模型向导采集', async () => {
+        const driver = new ScriptedPromptDriver([
+            { prompt: '选择 AI 抠图精细度', reply: '2' } // small
+        ]);
+
+        const result = await askAiModel(driver);
+        expect(result).toBe('small');
+    });
+
+    it('向导取消中断时传递 CancelError', async () => {
+        const driver = new ScriptedPromptDriver([{ prompt: '选择 AI 抠图精细度', reply: '1', cancel: true }]);
+
+        await expect(askAiModel(driver)).rejects.toBeInstanceOf(CancelError);
     });
 });

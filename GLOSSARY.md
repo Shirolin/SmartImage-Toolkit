@@ -47,3 +47,12 @@
 ### Split Orchestrator（切图编排器）
 
 切图与后处理领域级编排模块（`executeSplitCustom` / `split-custom.ts`）。统摄入参防御性核验、物理网格切图、受控并发居中批处理、双阶段失败归集与回包拼装。
+
+### PromptDriver（交互驱动器）
+
+本地可替换（Local-substitutable）的深模块接缝（`src/prompt/driver.ts`），仅呈现 `select`、`input`、`notify` 极简入口。在接缝后完整吸收 ANSI 光标回退擦除、TTY rawMode 状态维护、会话级 Readline 缓冲队列与就地校验重问循环。
+
+### Wizard Workflow（向导工作流）
+
+纯领域的交互配置采集工作流（`src/prompt/wizards/`）。接收 `PromptDriver` 驱动实例，专注完成多步参数引导、回退分支跳转与强类型配置对象构建，对具体终端流与输入载体零感知。
+
