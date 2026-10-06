@@ -1,13 +1,7 @@
 import sharp from 'sharp';
-import path from 'path';
-import { promises as fsp } from 'fs';
-
-import { TrimConfig, CropConfig } from './cli';
+import type { TrimConfig, CropConfig } from './config-types';
 import type { OpResult } from './shared/results';
-import { ensureDir, allocateFilePath } from './shared/output-naming';
-import { orientedSize } from './shared/orientation';
-import { applyEncoding } from './shared/encode';
-import { normalizeExt } from './shared/formats';
+import { defineOperator } from './shared/pipeline';
 
 // trim 专属结果：成功时附带 residue 报告（实际切量 + 探测口径分类 + 置信度）
 // cuts 是 sides 过滤后实际执行的切除；kinds 走全量探测口径——被 sides 滤掉的边也会如实标注，方便发现“故意保留的残留”
@@ -51,7 +45,6 @@ function classifyStrip(
         const rowBase = y * imgW * 4;
         for (let x = x0; x < x0 + w; x++) {
             const i = rowBase + x * 4;
-            // 越界不可能（循环边界保证），?? 只是统一读取风格
             const r = data[i] ?? bgR;
             const g = data[i + 1] ?? bgG;
             const b = data[i + 2] ?? bgB;
@@ -125,157 +118,135 @@ async function buildTrimResidue(
     confidence = Math.max(0, Math.round(confidence * 100) / 100);
     return { cuts: { ...appliedCuts }, kinds, confidence };
 }
-export function processTrimOrCrop(
-    filePath: string,
-    action: 'trim',
-    config: TrimConfig,
-    formatExt: string | null
-): Promise<TrimResult>;
-export function processTrimOrCrop(
-    filePath: string,
-    action: 'crop',
-    config: CropConfig,
-    formatExt: string | null
-): Promise<TrimResult>;
-export async function processTrimOrCrop(
-    filePath: string,
-    action: 'trim' | 'crop',
-    config: TrimConfig | CropConfig,
-    formatExt: string | null
-): Promise<TrimResult> {
-    const dir = path.dirname(filePath);
-    const ext = path.extname(filePath);
-    const name = path.basename(filePath, ext);
 
-    // 输出扩展名归一化（小写；.jpeg→.jpg），未知格式原样透传
-    const actualExt = normalizeExt(formatExt || ext);
-    const isTrim = action === 'trim';
-    const subDirName = isTrim ? 'trimmed' : 'cropped';
-    const outDir = path.join(dir, subDirName);
-
-    // 占位路径声明：allocate 移到全部参数校验之后，校验早退时尚无占位可泄漏
-    let outputPath = '';
-
-    try {
-        // 元数据只读一次，trim/crop 分支复用
-        // metadata() 返回未旋转的原始宽高，orientation 5~8 需互换；
-        // 后续 trim 偏移量与 crop 裁剪框都在摆正后的坐标系里，故用摆正尺寸
-        const oriented = await orientedSize(filePath);
+/**
+ * 智能去边纯算子配方
+ * I/O、独占占位、EXIF 摆正与异常回滚已下沉至 shared/pipeline
+ */
+export const processTrim = defineOperator<TrimConfig, { residue?: TrimResidue }>({
+    destination: { subDir: 'trimmed' },
+    transform: async ({ sharp: baseSharp, oriented, filePath, config }) => {
+        if (!('threshold' in config) || typeof config.threshold !== 'number') {
+            return { error: 'trim 配置缺少 threshold。' };
+        }
         const originalW = oriented.width;
         const originalH = oriented.height;
 
-        // rotate() 无参时按 EXIF Orientation 自动摆正，必须在 extract 之前应用，
-        // 否则裁剪坐标与摆正后的探测结果不一致
-        let sharpInstance = sharp(filePath).rotate();
-        // residue 报告载体：crop 分支保持缺席，trim 分支在下方赋值
-        let residue: TrimResidue | undefined;
+        const defaultResidue: TrimResidue = {
+            cuts: { top: 0, bottom: 0, left: 0, right: 0 },
+            kinds: { top: 'none', bottom: 'none', left: 'none', right: 'none' },
+            confidence: 1
+        };
 
-        // 关键逻辑分支：trim vs crop（重载签名保证配对，in 守卫再收窄）
-        if (action === 'trim') {
-            if (!('threshold' in config)) {
-                return { status: 'error', file: filePath, reason: 'trim 配置缺少 threshold。' };
-            }
-            const trimCfg = config;
-            residue = {
-                cuts: { top: 0, bottom: 0, left: 0, right: 0 },
-                kinds: { top: 'none', bottom: 'none', left: 'none', right: 'none' },
-                confidence: 1
+        // 隐式探测：仅在内存中执行全方位 Trim 看能切出什么边界
+        // raw() 输出的 info 同样带 trimOffsetLeft/Top 与裁后宽高，省掉一次全图编码往返
+        const { info: probeInfo } = await baseSharp
+            .clone()
+            .trim({ threshold: config.threshold })
+            .raw()
+            .toBuffer({ resolveWithObject: true });
+
+        // 未发生有效切除：尺寸未变，直接返回原管道与默认零残留
+        if (probeInfo.width === originalW && probeInfo.height === originalH) {
+            return {
+                pipeline: baseSharp,
+                extra: { residue: defaultResidue }
             };
+        }
 
-            // --- 智能边向选择探底方案 ---
-            // 隐式测试：仅在内存中执行全方位 Trim 看能切出什么边界
-            // 探测必须与最终流水线同样先 rotate()，否则 trimOffset 基于未摆正坐标系，extract 会整体错位
-            // 探测只要边界信息：raw() 输出的 info 同样带 trimOffsetLeft/Top 与裁后宽高，
-            // 省掉一次全图编码往返，避免大图批量处理时的 CPU 与内存峰值翻倍（见缺陷 4）
-            const { info: probeInfo } = await sharp(filePath)
-                .rotate()
-                .trim({ threshold: trimCfg.threshold })
-                .raw()
-                .toBuffer({ resolveWithObject: true });
+        const cutLeft = -(probeInfo.trimOffsetLeft || 0);
+        const cutTop = -(probeInfo.trimOffsetTop || 0);
+        const cutRight = originalW - cutLeft - probeInfo.width;
+        const cutBottom = originalH - cutTop - probeInfo.height;
 
-            // 仅当确实发生切除行为（尺寸变化）才进入后续运算，否则按原图保存
-            if (probeInfo.width !== originalW || probeInfo.height !== originalH) {
-                // 解析出系统探测认为应当剔除的四个方位像素量
-                // trimOffsetLeft / trimOffsetTop 是被裁切后剩余图像相对于原图左上角的偏移，本质上就是左边和上边被切掉的像素数
-                const cutLeft = -(probeInfo.trimOffsetLeft || 0);
-                const cutTop = -(probeInfo.trimOffsetTop || 0);
+        const activeSides = config.sides || ['top', 'bottom', 'left', 'right'];
+        const finalTop = activeSides.includes('top') ? cutTop : 0;
+        const finalLeft = activeSides.includes('left') ? cutLeft : 0;
+        const finalBottom = activeSides.includes('bottom') ? cutBottom : 0;
+        const finalRight = activeSides.includes('right') ? cutRight : 0;
 
-                // 右边的切去量 = 原宽度 - cutLeft - 裁切后的结果新宽度
-                const cutRight = originalW - cutLeft - probeInfo.width;
-                // 底部的切去量 = 原高度 - cutTop - 裁切后的结果新高度
-                const cutBottom = originalH - cutTop - probeInfo.height;
+        const newWidth = originalW - finalLeft - finalRight;
+        const newHeight = originalH - finalTop - finalBottom;
 
-                // 3. 构建我们自己的 extract 方框，决定接纳哪些边的切除建议
-                const activeSides = trimCfg.sides || ['top', 'bottom', 'left', 'right'];
+        if (newWidth <= 0 || newHeight <= 0) {
+            return { error: '容差计算结果为空或越界。' };
+        }
 
-                const finalTop = activeSides.includes('top') ? cutTop : 0;
-                const finalLeft = activeSides.includes('left') ? cutLeft : 0;
-                const finalBottom = activeSides.includes('bottom') ? cutBottom : 0;
-                const finalRight = activeSides.includes('right') ? cutRight : 0;
-
-                const newWidth = originalW - finalLeft - finalRight;
-                const newHeight = originalH - finalTop - finalBottom;
-
-                if (newWidth <= 0 || newHeight <= 0) {
-                    return { status: 'error', file: filePath, reason: '容差计算结果为空或越界。' };
-                }
-
-                // 过滤筛选后等价于一刀没切时直接跳过 extract
-                if (newWidth !== originalW || newHeight !== originalH) {
-                    sharpInstance = sharpInstance.extract({
-                        left: finalLeft,
-                        top: finalTop,
-                        width: newWidth,
-                        height: newHeight
-                    });
-                }
-                // residue 报告：分析失败则保持缺席（未知不瞎报）；kinds 全量探测口径，cuts 只记实际执行
-                residue = await buildTrimResidue(
-                    filePath,
-                    originalW,
-                    originalH,
-                    { top: cutTop, bottom: cutBottom, left: cutLeft, right: cutRight },
-                    { top: finalTop, bottom: finalBottom, left: finalLeft, right: finalRight },
-                    trimCfg.threshold
-                ).catch(() => undefined);
-            }
-        } else {
-            if (!('top' in config)) {
-                return { status: 'error', file: filePath, reason: 'crop 配置缺少边距。' };
-            }
-            const cropCfg = config;
-            // 复用已读元数据，防止切除过度报错
-            const newWidth = originalW - cropCfg.left - cropCfg.right;
-            const newHeight = originalH - cropCfg.top - cropCfg.bottom;
-
-            if (newWidth <= 0 || newHeight <= 0) {
-                return { status: 'error', file: filePath, reason: '裁剪范围大于原图尺寸，将导致图像消失！' };
-            }
-
-            sharpInstance = sharpInstance.extract({
-                left: cropCfg.left,
-                top: cropCfg.top,
+        let pipeline = baseSharp;
+        if (newWidth !== originalW || newHeight !== originalH) {
+            pipeline = baseSharp.clone().extract({
+                left: finalLeft,
+                top: finalTop,
                 width: newWidth,
                 height: newHeight
             });
         }
 
-        // O_EXCL 独占占位命名：全部参数校验通过后才建占位，早退路径无残留
-        // 建目录同样在 try 内：目录不可写/路径过长/磁盘满时按 OpResult 报错，不让 reject 逃出契约（见缺陷 3）
-        await ensureDir(outDir);
-        outputPath = await allocateFilePath(outDir, name, actualExt);
-        // 统一编码后落盘（未知扩展原样透传）
-        sharpInstance = applyEncoding(sharpInstance, actualExt);
+        const residue = await buildTrimResidue(
+            filePath,
+            originalW,
+            originalH,
+            { top: cutTop, bottom: cutBottom, left: cutLeft, right: cutRight },
+            { top: finalTop, bottom: finalBottom, left: finalLeft, right: finalRight },
+            config.threshold
+        ).catch(() => undefined);
 
-        await sharpInstance.toFile(outputPath);
-        return { status: 'success', file: filePath, ...(residue ? { residue } : {}) };
-    } catch (err: unknown) {
-        // 占位由本进程独占创建：失败时删同路径幽灵空文件，不碰目录；早退前无占位则跳过
-        if (outputPath) await fsp.unlink(outputPath).catch(() => {});
-        let errMsg = '未知错误';
-        if (err instanceof Error) {
-            errMsg = err.message;
-        }
-        return { status: 'error', file: filePath, reason: errMsg };
+        return {
+            pipeline,
+            extra: residue ? { residue } : undefined
+        };
     }
+});
+
+/**
+ * 手动裁剪纯算子配方
+ * I/O、独占占位、EXIF 摆正与异常回滚已下沉至 shared/pipeline
+ */
+export const processCrop = defineOperator<CropConfig>({
+    destination: { subDir: 'cropped' },
+    transform: ({ sharp: baseSharp, oriented, config }) => {
+        if (!('top' in config) || typeof config.top !== 'number') {
+            return { error: 'crop 配置缺少边距。' };
+        }
+        const newWidth = oriented.width - config.left - config.right;
+        const newHeight = oriented.height - config.top - config.bottom;
+
+        if (newWidth <= 0 || newHeight <= 0) {
+            return { error: '裁剪范围大于原图尺寸，将导致图像消失！' };
+        }
+
+        return baseSharp.clone().extract({
+            left: config.left,
+            top: config.top,
+            width: newWidth,
+            height: newHeight
+        });
+    }
+});
+
+/**
+ * 兼容适配器（Adapter）：维持既有 processTrimOrCrop 签名，分发至 processTrim 或 processCrop
+ */
+export function processTrimOrCrop(
+    filePath: string,
+    action: 'trim',
+    config: TrimConfig,
+    formatExt?: string | null
+): Promise<TrimResult>;
+export function processTrimOrCrop(
+    filePath: string,
+    action: 'crop',
+    config: CropConfig,
+    formatExt?: string | null
+): Promise<TrimResult>;
+export async function processTrimOrCrop(
+    filePath: string,
+    action: 'trim' | 'crop',
+    config: TrimConfig | CropConfig,
+    formatExt?: string | null
+): Promise<TrimResult> {
+    if (action === 'trim') {
+        return processTrim(filePath, config as TrimConfig, formatExt);
+    }
+    return processCrop(filePath, config as CropConfig, formatExt);
 }

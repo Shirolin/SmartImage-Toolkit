@@ -18,7 +18,7 @@ import type { SpinnerLike } from './core';
 import { convertImage } from './core';
 import { splitImage } from './split';
 import { resizeImage } from './resize';
-import { processTrimOrCrop } from './trim';
+import { processTrim, processCrop } from './trim';
 import { processCenter } from './center';
 import { processPadAspect } from './pad-aspect';
 import { BATCH_SIZE } from './shared/constants';
@@ -200,11 +200,11 @@ export async function executeTaskOnFile(
         }
         case 'trim': {
             const ext = resolveOutExt(task.config.outputFormat);
-            return await processTrimOrCrop(file, 'trim', task.config, ext);
+            return await processTrim(file, task.config, ext);
         }
         case 'crop': {
             const ext = resolveOutExt(task.config.outputFormat);
-            return await processTrimOrCrop(file, 'crop', task.config, ext);
+            return await processCrop(file, task.config, ext);
         }
         case 'center': {
             const ext = resolveOutExt(task.config.outputFormat);

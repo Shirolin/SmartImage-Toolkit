@@ -42,3 +42,9 @@
 ### 负向影响与代价 (Trade-offs)
 
 - 新增一个内部抽象层（`pipeline.ts`），初期重构需调整算子实现结构并确保全仓单测绿灯。
+
+## 进展追踪 (Progress)
+
+- **2026-10-06 (Round 1)**：创建 `src/shared/pipeline.ts`，首批迁移 `center.ts` 与 `pad-aspect.ts` 并通过验证。
+- **2026-10-06 (Round 3)**：全面收官单图算子迁移，将 `resize.ts` 与 `trim.ts`（包含 `processTrim` 与 `processCrop`）完全重构为纯配方，保留 `processTrimOrCrop` 适配器向下兼容。全部单图算子（`center`, `pad-aspect`, `resize`, `trim`, `crop`）的底层 I/O、独占占位、EXIF 摆正与幽灵清理逻辑现已 100% 归拢至执行管线接缝之后。
+
