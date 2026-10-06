@@ -3,6 +3,9 @@ import os from 'os';
 import path from 'path';
 import sharp from 'sharp';
 
+// 避免 Windows 环境下 libvips 长期占用临时文件句柄阻碍 afterEach 删除
+sharp.cache(false);
+
 /** 创建隔离的临时目录 */
 export function makeTempDir(prefix = 'sit-test-'): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

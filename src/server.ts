@@ -1,14 +1,12 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import { promises as fsp, realpathSync } from 'fs';
+import { promises as fsp } from 'fs';
 import { execFile } from 'child_process';
-import { splitImage } from './split';
-import { processCenter } from './center';
 import { SUPPORTED_EXTS } from './utils';
-import { resolveImageExt } from './shared/formats';
-import { IDLE_TIMEOUT_MS, IDLE_CHECK_MS, MAX_TILES, EXIT_GRACE_MS } from './shared/constants';
-import type { SplitResult } from './shared/results';
+import { IDLE_TIMEOUT_MS, IDLE_CHECK_MS, EXIT_GRACE_MS } from './shared/constants';
+import { PathSandbox } from './server/guard';
+import { executeSplitCustom } from './server/split-custom';
 
 // 第一性原理：本地服务默认只信任本机回环，且文件读与命令执行都走“白名单 + 数组传参”，
 // 不给字符串拼接留任何注入面。
@@ -68,51 +66,7 @@ app.use(express.static(path.join(__dirname, '../ui')));
 
 // 读取默认通过 CLI 传入的路径参数
 const defaultImagePath = process.argv[2] ? path.resolve(process.argv[2]) : '';
-
-/** 用户通过文件对话框显式选中的目录：加入可读白名单，否则「选了桌面图片却 403」 */
-const extraRoots = new Set<string>();
-
-/** 可读根目录：当前工作目录 + 用户显式授权目录 + 默认图所在目录；白名单之外一律拒绝 */
-function getAllowedRoots(): string[] {
-    const roots = [process.cwd(), ...extraRoots];
-    if (defaultImagePath) roots.push(path.dirname(defaultImagePath));
-    return roots;
-}
-
-/**
- * 取路径的物理真实路径：展开符号链接与 Windows junction（`mklink /J`）到最终目标。
- * 路径不存在（如尚未落盘的切片）或不可访问时退回 path.resolve —— 路由随后还会 stat/sendFile，
- * 不存在的路径最终以 404 收场，不会因为这次退回而放行链接指向的外部目标。
- */
-function realpathOrResolve(p: string): string {
-    try {
-        return realpathSync(p);
-    } catch {
-        return path.resolve(p);
-    }
-}
-
-/** 白名单根 realpath 结果缓存：根集合稳定，每个根规范化一次后复用，避免每次请求都打文件系统 */
-const rootRealpathCache = new Map<string, string>();
-
-/** 路径是否落在白名单根内（含根自身），供单测与路由共用 */
-export function isPathAllowed(p: string, roots: string[]): boolean {
-    // 先取物理路径再比较：白名单目录内的 junction/symlink 可指向根外，纯字符串前缀比较会误放行
-    const real = realpathOrResolve(p);
-    // Windows 路径大小写不敏感：从别处粘贴来的路径不应因大小写差异被拒
-    const resolved = process.platform === 'win32' ? real.toLowerCase() : real;
-    return roots.some((root) => {
-        let base = rootRealpathCache.get(root);
-        if (base === undefined) {
-            base = realpathOrResolve(root);
-            rootRealpathCache.set(root, base);
-        }
-        const prefix = process.platform === 'win32' ? base.toLowerCase() : base;
-        // 根自身即「盘符根」时其末尾已带分隔符，补一次会拼出 `d:\\` 而漏掉所有子文件
-        const childPrefix = prefix.endsWith(path.sep) ? prefix : prefix + path.sep;
-        return resolved === prefix || resolved.startsWith(childPrefix);
-    });
-}
+const sandbox = new PathSandbox(defaultImagePath);
 
 app.get('/api/default-image', (req, res) => {
     res.json({ path: defaultImagePath });
@@ -124,7 +78,7 @@ app.get('/api/load-image', (req, res) => {
         return res.status(400).send('No path provided');
     }
     const absolutePath = path.resolve(filePath);
-    if (!isPathAllowed(absolutePath, getAllowedRoots())) {
+    if (!sandbox.isAllowed(absolutePath)) {
         // 旧文案只是一个 Forbidden，用户看不到"该先用选择图片授权我选的目录"
         return res.status(403).send('Forbidden: 该目录未授权，请先用「选择图片」打开该文件，再预览或切图');
     }
@@ -150,180 +104,24 @@ app.get('/api/load-image', (req, res) => {
         });
 });
 
-/** 切分线守卫：数组、长度 2..100、全为非负整数（须为整数）、严格递增 */
-export function isValidCutArray(value: unknown): value is number[] {
-    if (!Array.isArray(value)) return false;
-    if (value.length < 2 || value.length > 100) return false;
-    for (const item of value) {
-        if (typeof item !== 'number' || !Number.isFinite(item) || !Number.isInteger(item) || item < 0) return false;
-    }
-    for (let i = 1; i < value.length; i++) {
-        if (value[i] <= value[i - 1]) return false;
-    }
-    return true;
-}
-
-/** 切片总数：(cutX.length-1)*(cutY.length-1)，供路由上限守卫与单测共用 */
-export function countSplitTiles(cutX: number[], cutY: number[]): number {
-    return (cutX.length - 1) * (cutY.length - 1);
-}
-
-/** split-custom 成功回包拼装：failedTiles 与 SplitResult 同形；居中失败单独回报，不发散成假成功 */
-export function buildSplitCustomSuccess(
-    result: SplitResult,
-    centerFailures: Array<{ file: string; reason: string }> = []
-): {
-    success: true;
-    message: string;
-    files: string[];
-    artifacts: string[];
-    failedTiles: Array<{ row: number; col: number; reason: string }>;
-    centerFailures: Array<{ file: string; reason: string }>;
-} {
-    return {
-        success: true,
-        message: centerFailures.length > 0 ? `切图完成，但有 ${centerFailures.length} 张切片居中失败` : '切图完成！',
-        files: result.generatedFiles,
-        artifacts: result.artifacts ?? [],
-        failedTiles: result.failedTiles ?? [],
-        centerFailures
-    };
-}
-
-const CENTER_SIDES = new Set(['top', 'bottom', 'left', 'right']);
-const CENTER_FORMATS = new Set(['original', 'webp', 'png', 'mozjpeg']);
-
-/** centerConfig 白名单校验：缺省放行，只校验出现的字段 */
-export function isValidCenterConfig(value: unknown): boolean {
-    if (value === null || value === undefined) return true;
-    if (typeof value !== 'object') return false;
-    const cfg = value as Record<string, unknown>;
-    if ('threshold' in cfg) {
-        const t = cfg['threshold'];
-        if (typeof t !== 'number' || !Number.isFinite(t) || t < 1 || t > 100) return false;
-    }
-    if ('fillColor' in cfg) {
-        const f = cfg['fillColor'];
-        if (typeof f !== 'string') return false;
-        if (f !== 'transparent' && !/^#[0-9a-fA-F]{6}$/.test(f)) return false;
-    }
-    if ('outputFormat' in cfg) {
-        const o = cfg['outputFormat'];
-        if (typeof o !== 'string' || !CENTER_FORMATS.has(o)) return false;
-    }
-    if ('sides' in cfg && cfg['sides'] !== undefined) {
-        const s = cfg['sides'];
-        if (!Array.isArray(s)) return false;
-        for (const side of s) {
-            if (typeof side !== 'string' || !CENTER_SIDES.has(side)) return false;
-        }
-    }
-    return true;
-}
-
-app.post('/api/split-custom', (req, res) => {
+app.post('/api/split-custom', async (req, res) => {
     // 并发闸门：单个请求会把最多 MAX_TILES 张切片全量并发写盘，多开页面/多进程同时发会拖垮整机；
     // 前端的 disabled 只挡得住自己那一页
     if (inFlight > 0) {
         return res.status(429).json({ success: false, error: '已有切图任务在进行，请等待其完成' });
     }
-    const rawBody: unknown = req.body;
-    const body = (typeof rawBody === 'object' && rawBody !== null ? rawBody : {}) as Record<string, unknown>;
-    const { filePath: rawPath, cutX, cutY, smartCenter, centerConfig } = body;
 
-    if (typeof rawPath !== 'string' || !rawPath) {
-        return res.status(400).json({ success: false, error: '缺少必要参数' });
-    }
-    if (!isValidCutArray(cutX) || !isValidCutArray(cutY)) {
-        return res.status(400).json({ success: false, error: '切分线参数非法：须为 2..100 个严格递增的非负整数' });
-    }
-    if (countSplitTiles(cutX, cutY) > MAX_TILES) {
-        return res.status(400).json({ success: false, error: `切片总数超限：最多 ${MAX_TILES} 张` });
-    }
-    if (!isValidCenterConfig(centerConfig)) {
-        return res.status(400).json({ success: false, error: '居中配置参数非法' });
-    }
-
-    const filePath = path.resolve(rawPath);
-    if (!isPathAllowed(filePath, getAllowedRoots())) {
-        return res.status(403).json({ success: false, error: '路径不在允许范围内' });
-    }
-    if (!SUPPORTED_EXTS.includes(path.extname(filePath).toLowerCase())) {
-        return res.status(400).json({ success: false, error: '仅支持图片文件' });
-    }
-
-    // 真实任务：守卫全部通过后才刷新闲置计时
     touchActivity();
-    // 计数在真正开工时递增，在 then/catch 之后统一递减（见链尾 finally）
     inFlight += 1;
 
-    splitImage(filePath, { rows: 0, cols: 0, cutX, cutY })
-        .then((result) => {
-            if (result.status !== 'success') {
-                res.status(500).json({ success: false, error: result.reason });
-                return;
-            }
-            // 2. 如果开启了智能居中，对所有切片进行后处理
-            const runCenter = async (): Promise<void> => {
-                // 后处理失败必须回传：丢掉返回值会让「居中全失败」也报「切图完成」
-                const centerFailures: Array<{ file: string; reason: string }> = [];
-                if (smartCenter) {
-                    console.log(`✨ 正在对 ${result.generatedFiles?.length} 张切片执行智能居中...`);
-                    // 使用前端传来的配置，如果不存在则回退至安全默认值
-                    const rawCfg = (typeof centerConfig === 'object' && centerConfig !== null ? centerConfig : {}) as {
-                        threshold?: unknown;
-                        fillColor?: unknown;
-                        outputFormat?: unknown;
-                        sides?: unknown;
-                    };
-                    const threshold =
-                        typeof rawCfg.threshold === 'number' && Number.isFinite(rawCfg.threshold)
-                            ? Math.min(100, Math.max(1, Math.round(rawCfg.threshold)))
-                            : 10;
-                    const fillColor = typeof rawCfg.fillColor === 'string' ? rawCfg.fillColor : 'transparent';
-                    type CenterOutput = 'original' | 'webp' | 'png' | 'mozjpeg';
-                    const isCenterOutput = (v: unknown): v is CenterOutput =>
-                        v === 'original' || v === 'webp' || v === 'png' || v === 'mozjpeg';
-                    const outFormat: CenterOutput = isCenterOutput(rawCfg.outputFormat)
-                        ? rawCfg.outputFormat
-                        : 'original';
-                    // sides 只在明确是数组时透传：空数组表示「一个方向都不补齐」，
-                    // 不能用 || 回退，否则用户取消全部勾选会被静默还原成四边补齐
-                    const sides = Array.isArray(rawCfg.sides)
-                        ? rawCfg.sides.filter(
-                              (s): s is 'top' | 'bottom' | 'left' | 'right' =>
-                                  s === 'top' || s === 'bottom' || s === 'left' || s === 'right'
-                          )
-                        : undefined;
-                    const finalConfig = { threshold, fillColor, outputFormat: outFormat, ...(sides ? { sides } : {}) };
-                    // 复用共享解析：mozjpeg 落盘统一为 .jpg，不再手写点拼接
-                    const formatExt =
-                        finalConfig.outputFormat === 'original'
-                            ? null
-                            : resolveImageExt(finalConfig.outputFormat, '.jpg');
-
-                    for (const file of result.generatedFiles || []) {
-                        const centered = await processCenter(file, finalConfig, formatExt);
-                        if (centered.status !== 'success') {
-                            centerFailures.push({ file, reason: centered.reason ?? '未知错误' });
-                        }
-                    }
-                }
-                // files 语义=切片图（前端依赖）；排查产物经 artifacts 透出，不混入 files
-                // failedTiles 与 SplitResult 同形；居中失败经 centerFailures 单独回报
-                res.json(buildSplitCustomSuccess(result, centerFailures));
-            };
-            runCenter().catch((e: unknown) => {
-                res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
-            });
-        })
-        .catch((e: unknown) => {
-            res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
-        })
-        .finally(() => {
-            // 无论成功/失败/异常都要放行闸门，否则一次失败会把服务锁死
-            inFlight -= 1;
-        });
+    try {
+        const outcome = await executeSplitCustom(req.body, sandbox);
+        res.status(outcome.status).json(outcome.body);
+    } catch (e: unknown) {
+        res.status(500).json({ success: false, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+        inFlight -= 1;
+    }
 });
 
 setInterval(() => {
@@ -373,7 +171,7 @@ app.get('/api/open-file-dialog', (req, res) => {
             console.log('获取到的文件路径:', filePath);
             // 用户显式选择就是授权：把该文件所在目录加入可读白名单，
             // 否则在对话框里选项目目录外的图片会被自家白名单 403 挡掉
-            if (filePath) extraRoots.add(path.dirname(path.resolve(filePath)));
+            if (filePath) sandbox.authorize(filePath);
             res.json({ success: true, path: filePath });
         }
     );
@@ -443,5 +241,15 @@ const startServer = (port: number): void => {
 if (require.main === module) {
     startServer(PORT);
 }
+
+// 统一向后兼容导出，单测或旧调用方直接使用
+export {
+    isPathAllowed,
+    isValidCutArray,
+    isValidCenterConfig,
+    countSplitTiles,
+    buildSplitCustomSuccess,
+    PathSandbox
+} from './server/guard';
 
 export default app;

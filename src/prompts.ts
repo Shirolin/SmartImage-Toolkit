@@ -677,9 +677,7 @@ export async function askResizeConfig(): Promise<ResizeConfig | 'back'> {
 }
 
 export type TrimCropAnswer =
-    | { kind: 'trim'; trimConfig: TrimConfig }
-    | { kind: 'crop'; cropConfig: CropConfig }
-    | 'back';
+    { kind: 'trim'; trimConfig: TrimConfig } | { kind: 'crop'; cropConfig: CropConfig } | 'back';
 
 /** 边缘修剪（智能去边 / 手动裁剪）全流程采集 */
 export async function askTrimCrop(): Promise<TrimCropAnswer> {

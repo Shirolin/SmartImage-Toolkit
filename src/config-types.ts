@@ -11,17 +11,7 @@ export class CancelError extends Error {
 
 /** 顶层特效方案 */
 export type TargetFormat =
-    | 'webp'
-    | 'png'
-    | 'avif'
-    | 'mozjpeg'
-    | 'rmbg_solid'
-    | 'split'
-    | 'resize'
-    | 'trim'
-    | 'crop'
-    | 'center'
-    | 'pad_aspect';
+    'webp' | 'png' | 'avif' | 'mozjpeg' | 'rmbg_solid' | 'split' | 'resize' | 'trim' | 'crop' | 'center' | 'pad_aspect';
 
 export const KNOWN_FORMATS: readonly TargetFormat[] = [
     'webp',

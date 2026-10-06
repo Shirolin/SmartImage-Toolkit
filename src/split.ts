@@ -5,7 +5,8 @@ import { writeFile, rm } from 'fs/promises';
 import type { SplitResult } from './shared/results';
 import { allocateDir } from './shared/output-naming';
 import { applyEncoding } from './shared/encode';
-import { SPLIT_TRIM_THRESHOLD, MAX_TILES, BATCH_SIZE } from './shared/constants';
+import { MAX_TILES, BATCH_SIZE } from './shared/constants';
+import { centerTileBuffer } from './center';
 
 // 兼容旧名：统一复用共享结果类型
 export type { SplitResult };
@@ -218,72 +219,17 @@ export async function splitImage(
 
                         let pipeline = sharp(tileBuffer);
 
-                        // 智能居中逻辑
+                        // 智能居中逻辑：统一委托给 center 模块的内存级居中变换
                         if (options.centerMode && options.centerMode !== 'none') {
                             try {
-                                // 0. 边缘杂边消除 (Edge Shaving)
-                                // 若原图含有不易察觉的切分线网格 (如极淡的灰色1px线条)，会阻碍 trim 的寻路
-                                // 依据用户选择，安全向内剃去指定的边缘像素厚度
-                                const shave = options.edgeShave || 0;
-                                const shavedBuffer =
-                                    shave > 0 && tileWidth > shave * 2 && tileHeight > shave * 2
-                                        ? await sharp(tileBuffer)
-                                              .extract({
-                                                  left: shave,
-                                                  top: shave,
-                                                  width: tileWidth - shave * 2,
-                                                  height: tileHeight - shave * 2
-                                              })
-                                              .toBuffer()
-                                        : tileBuffer;
-
-                                // --- 修正采样逻辑：从“剃肉”后的干净 Buffer 中提取背景色 ---
-                                const { data, info } = await sharp(shavedBuffer)
-                                    .extract({ left: 0, top: 0, width: 1, height: 1 })
-                                    .raw()
-                                    .toBuffer({ resolveWithObject: true });
-
-                                const r = data[0];
-                                const g = data[1];
-                                const b = data[2];
-                                const alpha = info.channels === 4 ? data[3] : 255;
-
-                                // 1. 修剪空白边缘 (此步骤丢弃所有纯白或透明的边缘填充)
-                                // SPLIT_TRIM_THRESHOLD 容差吃掉肉眼看不见但阻碍判空的 WebP/JPEG 压缩噪波点 (如 #Fdfdfd)
-                                const trimmedBuffer = await sharp(shavedBuffer)
-                                    .trim({
-                                        background: { r, g, b, alpha },
-                                        threshold: SPLIT_TRIM_THRESHOLD
-                                    })
-                                    .toBuffer();
-
-                                const trimMeta = await sharp(trimmedBuffer).metadata();
-                                const coreWidth = trimMeta.width || tileWidth;
-                                const coreHeight = trimMeta.height || tileHeight;
-
-                                // 2. 根据用户要求的最终长宽重新扩展画布
-                                let finalCanvasWidth = tileWidth;
-                                let finalCanvasHeight = tileHeight;
-
-                                if (options.centerMode === 'square') {
-                                    const maxSize = Math.max(tileWidth, tileHeight);
-                                    finalCanvasWidth = maxSize;
-                                    finalCanvasHeight = maxSize;
-                                }
-
-                                // 3. 计算在目标大画布中的安全留白并拓展
-                                const extendLeft = Math.floor((finalCanvasWidth - coreWidth) / 2);
-                                const extendRight = finalCanvasWidth - coreWidth - extendLeft;
-                                const extendTop = Math.floor((finalCanvasHeight - coreHeight) / 2);
-                                const extendBottom = finalCanvasHeight - coreHeight - extendTop;
-
-                                pipeline = sharp(trimmedBuffer).extend({
-                                    top: extendTop,
-                                    bottom: extendBottom,
-                                    left: extendLeft,
-                                    right: extendRight,
-                                    background: { r, g, b, alpha }
-                                });
+                                pipeline = await centerTileBuffer(
+                                    tileBuffer,
+                                    { width: tileWidth, height: tileHeight },
+                                    {
+                                        centerMode: options.centerMode,
+                                        edgeShave: options.edgeShave
+                                    }
+                                );
                             } catch (trimErr: unknown) {
                                 // trim 失败记因留痕，回退原始碎片继续跑，保证单片不断
                                 const trimReason = trimErr instanceof Error ? trimErr.message : String(trimErr);

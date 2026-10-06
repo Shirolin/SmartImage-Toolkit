@@ -104,7 +104,7 @@ describe('processTrimOrCrop - trim', () => {
         // 内容零损失：统一补齐 alpha 后与原中心逐字节一致
         const outRaw = await sharp(outPath).ensureAlpha().raw().toBuffer();
         const centerRaw = await sharp(center).ensureAlpha().raw().toBuffer();
-        expect(Buffer.compare(outRaw, centerRaw)).toBe(0);
+        expect(outRaw.toString('hex')).toBe(centerRaw.toString('hex'));
     });
 
     it('全透明图不崩溃并原样落盘', async () => {

@@ -5,8 +5,10 @@ import {
     isValidCutArray,
     isValidCenterConfig,
     countSplitTiles,
-    buildSplitCustomSuccess
-} from '../src/server';
+    buildSplitCustomSuccess,
+    PathSandbox,
+    validateSplitCustomBody
+} from '../src/server/guard';
 import { MAX_TILES } from '../src/shared/constants';
 
 // 服务端守卫单测：路径越权与切图参数非法输入必须被拦截（400/403 的前置判定逻辑）。
@@ -154,5 +156,72 @@ describe('isValidCenterConfig 居中配置白名单', () => {
     it('非法边向拒绝', () => {
         expect(isValidCenterConfig({ sides: ['top', 'middle'] })).toBe(false);
         expect(isValidCenterConfig({ sides: 'top' })).toBe(false);
+    });
+});
+
+describe('PathSandbox 路径沙箱', () => {
+    it('默认包含 cwd，显式授权目录后允许访问', () => {
+        const sandbox = new PathSandbox();
+        const currentFile = path.resolve('package.json');
+        expect(sandbox.isAllowed(currentFile)).toBe(true);
+
+        const customDir = path.resolve(process.cwd(), '../outside_temp_dir');
+        const customFile = path.join(customDir, 'pic.png');
+        expect(sandbox.isAllowed(customFile)).toBe(false);
+
+        sandbox.authorize(customFile);
+        expect(sandbox.isAllowed(customFile)).toBe(true);
+    });
+});
+
+describe('validateSplitCustomBody 统一请求体校验', () => {
+    it('缺少必要参数或非法切分线返回 400', () => {
+        const sandbox = new PathSandbox();
+        const emptyRes = validateSplitCustomBody({}, sandbox);
+        expect(emptyRes.ok).toBe(false);
+        if (!emptyRes.ok) expect(emptyRes.status).toBe(400);
+
+        const badCutRes = validateSplitCustomBody({ filePath: 'a.png', cutX: [0] }, sandbox);
+        expect(badCutRes.ok).toBe(false);
+        if (!badCutRes.ok) expect(badCutRes.status).toBe(400);
+    });
+
+    it('越权路径返回 403', () => {
+        const sandbox = new PathSandbox();
+        const res = validateSplitCustomBody(
+            {
+                filePath: path.resolve(process.cwd(), '../unauthorized_secret.png'),
+                cutX: [0, 100],
+                cutY: [0, 100]
+            },
+            sandbox
+        );
+        expect(res.ok).toBe(false);
+        if (!res.ok) expect(res.status).toBe(403);
+    });
+
+    it('合法参数成功收敛并赋予安全默认配置', () => {
+        const sandbox = new PathSandbox();
+        const targetPath = path.resolve('test/valid.png');
+        sandbox.authorize(targetPath);
+
+        const res = validateSplitCustomBody(
+            {
+                filePath: targetPath,
+                cutX: [0, 100, 200],
+                cutY: [0, 100, 200],
+                smartCenter: true,
+                centerConfig: { threshold: 15 }
+            },
+            sandbox
+        );
+
+        expect(res.ok).toBe(true);
+        if (res.ok) {
+            expect(res.params.cutX).toEqual([0, 100, 200]);
+            expect(res.params.smartCenter).toBe(true);
+            expect(res.params.centerConfig?.threshold).toBe(15);
+            expect(res.params.centerConfig?.fillColor).toBe('transparent');
+        }
     });
 });

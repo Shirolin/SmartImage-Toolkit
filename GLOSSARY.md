@@ -39,3 +39,11 @@
 ### Batch Orchestrator（批处理协调器）
 
 深层批处理调度引擎（`runBatch` / `orchestrator.ts`），统管受控并发窗口滑动、终端进度动画更新、单文件错误隔离、错误日志按日持久化与结果聚合。
+
+### PathSandbox（路径沙箱）
+
+管理受信任的根目录白名单并执行物理路径安全核验（`PathSandbox` / `guard.ts`）。完整展开 Windows Junction 与符号链接，消除盘符大小写与末尾斜杠差异，杜绝路径穿越攻击。
+
+### Split Orchestrator（切图编排器）
+
+切图与后处理领域级编排模块（`executeSplitCustom` / `split-custom.ts`）。统摄入参防御性核验、物理网格切图、受控并发居中批处理、双阶段失败归集与回包拼装。

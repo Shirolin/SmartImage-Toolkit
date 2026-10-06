@@ -34,10 +34,7 @@ export interface TransformContext<TConfig = void> {
 
 /** 算子变换函数的返回值：Sharp 管道、跳过信号、错误信号，或携带附加字段的对象 */
 export type TransformOutput<TExtra = Record<string, unknown>> =
-    | sharp.Sharp
-    | { pipeline: sharp.Sharp; extra?: TExtra }
-    | { skip: true; reason: string }
-    | { error: string };
+    sharp.Sharp | { pipeline: sharp.Sharp; extra?: TExtra } | { skip: true; reason: string } | { error: string };
 
 /** 底层流水线执行作业规格 */
 export interface PipelineJob<TConfig = void, TExtra = Record<string, unknown>> {
@@ -56,8 +53,7 @@ export interface PipelineJob<TConfig = void, TExtra = Record<string, unknown>> {
     }) => string | null;
     /** 输出路径规划规则，支持静态声明或基于输入动态生成的计算函数 */
     destination?:
-        | DestinationOptions
-        | ((ctx: { filePath: string; config: TConfig; targetExt: string }) => DestinationOptions);
+        DestinationOptions | ((ctx: { filePath: string; config: TConfig; targetExt: string }) => DestinationOptions);
     /** 编码覆写策略：传入 false 绕过默认 applyEncoding；或提供自定义编码函数 */
     encode?: false | ((pipeline: sharp.Sharp, targetExt: string, config: TConfig) => sharp.Sharp);
     /** 异常分类与文案映射钩子 */
@@ -70,8 +66,7 @@ export interface PipelineJob<TConfig = void, TExtra = Record<string, unknown>> {
 export interface OperatorDescriptor<TConfig, TExtra = Record<string, unknown>> {
     /** 输出路径规划规则（静态对象或映射函数） */
     destination?:
-        | DestinationOptions
-        | ((ctx: { filePath: string; config: TConfig; targetExt: string }) => DestinationOptions);
+        DestinationOptions | ((ctx: { filePath: string; config: TConfig; targetExt: string }) => DestinationOptions);
     /** 动态推断目标扩展名（缺省则维持 formatExt 或源文件扩展名） */
     resolveTargetExt?: (ctx: {
         filePath: string;
