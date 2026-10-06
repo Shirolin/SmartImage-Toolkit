@@ -11,6 +11,9 @@ export function applyEncoding(pipeline: sharp.Sharp, ext: string): sharp.Sharp {
     if (normalized === '.png') {
         return pipeline.png({ quality: 80, effort: 8 });
     }
+    if (normalized === '.avif') {
+        return pipeline.avif({ quality: 75, effort: 7 });
+    }
     if (normalized === '.jpg' || normalized === '.jpeg') {
         // '.jpeg' 分支为显式兼容保留：normalizeExt 已将其归一为 .jpg，
         // 此处兜住未来绕过归一直接传入的裸值（单测锁定）

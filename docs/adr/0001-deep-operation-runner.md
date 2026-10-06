@@ -46,5 +46,5 @@
 ## 进展追踪 (Progress)
 
 - **2026-10-06 (Round 1)**：创建 `src/shared/pipeline.ts`，首批迁移 `center.ts` 与 `pad-aspect.ts` 并通过验证。
-- **2026-10-06 (Round 3)**：全面收官单图算子迁移，将 `resize.ts` 与 `trim.ts`（包含 `processTrim` 与 `processCrop`）完全重构为纯配方，保留 `processTrimOrCrop` 适配器向下兼容。全部单图算子（`center`, `pad-aspect`, `resize`, `trim`, `crop`）的底层 I/O、独占占位、EXIF 摆正与幽灵清理逻辑现已 100% 归拢至执行管线接缝之后。
-
+- **2026-10-06 (Round 3)**：推进单图几何算子迁移，将 `resize.ts` 与 `trim.ts`（包含 `processTrim` 与 `processCrop`）完全重构为纯配方，保留 `processTrimOrCrop` 适配器向下兼容。
+- **2026-10-07 (Round 4)**：彻底拔除全仓最后的 I/O 孤岛。将 `core.ts` 中的轻量格式转码与重量级 AI 抠图物理分离为一级纯算子 `src/transcode.ts` 与 `src/matting.ts`；扩展管线接缝以支持 `encode` 策略覆写（守护 RGBA 无调色板保真）与 `formatError` 错误分类钩子；`src/core.ts` 纯化为 28 行薄层兼容适配器，`src/orchestrator.ts` 直接调度新算子。至此全项目所有单图算子 100% 收敛至执行管线深模块接缝之后。

@@ -47,10 +47,21 @@ export interface PipelineJob<TConfig = void, TExtra = Record<string, unknown>> {
     config: TConfig;
     /** 输出目标扩展名（如 '.webp', '.png', '.jpg'，传入 null 或缺省表示保持原图格式） */
     formatExt?: string | null;
+    /** 动态推断目标扩展名（缺省则维持 formatExt 或源文件扩展名） */
+    resolveTargetExt?: (ctx: {
+        filePath: string;
+        sourceExt: string;
+        config: TConfig;
+        formatExt?: string | null;
+    }) => string | null;
     /** 输出路径规划规则，支持静态声明或基于输入动态生成的计算函数 */
     destination?:
         | DestinationOptions
         | ((ctx: { filePath: string; config: TConfig; targetExt: string }) => DestinationOptions);
+    /** 编码覆写策略：传入 false 绕过默认 applyEncoding；或提供自定义编码函数 */
+    encode?: false | ((pipeline: sharp.Sharp, targetExt: string, config: TConfig) => sharp.Sharp);
+    /** 异常分类与文案映射钩子 */
+    formatError?: (err: unknown, stage: 'orient' | 'transform' | 'save') => string;
     /** 算子纯变换实现 */
     transform: (context: TransformContext<TConfig>) => Promise<TransformOutput<TExtra>> | TransformOutput<TExtra>;
 }
@@ -61,6 +72,17 @@ export interface OperatorDescriptor<TConfig, TExtra = Record<string, unknown>> {
     destination?:
         | DestinationOptions
         | ((ctx: { filePath: string; config: TConfig; targetExt: string }) => DestinationOptions);
+    /** 动态推断目标扩展名（缺省则维持 formatExt 或源文件扩展名） */
+    resolveTargetExt?: (ctx: {
+        filePath: string;
+        sourceExt: string;
+        config: TConfig;
+        formatExt?: string | null;
+    }) => string | null;
+    /** 编码覆写策略：传入 false 绕过默认 applyEncoding；或提供自定义编码函数 */
+    encode?: false | ((pipeline: sharp.Sharp, targetExt: string, config: TConfig) => sharp.Sharp);
+    /** 异常分类与文案映射钩子 */
+    formatError?: (err: unknown, stage: 'orient' | 'transform' | 'save') => string;
     /** 算子纯变换实现 */
     transform: (context: TransformContext<TConfig>) => Promise<TransformOutput<TExtra>> | TransformOutput<TExtra>;
 }
@@ -77,22 +99,32 @@ export async function executePipeline<TConfig = void, TExtra = Record<string, un
     const name = path.basename(filePath, ext);
 
     const sourceExt = normalizeExt(ext);
-    const targetExt = normalizeExt(formatExt || ext);
+    const resolvedExt =
+        typeof job.resolveTargetExt === 'function'
+            ? job.resolveTargetExt({ filePath, sourceExt, config, formatExt })
+            : formatExt || ext;
+    const targetExt = normalizeExt(resolvedExt || ext);
 
+    let stage: 'orient' | 'transform' | 'save' = 'orient';
     let outputPath = '';
 
     try {
         const oriented = await orientedSize(filePath);
         if (!oriented.width || !oriented.height) {
+            const reason =
+                typeof job.formatError === 'function'
+                    ? job.formatError(new Error('无法读取图片元数据(宽高)'), 'orient')
+                    : '无法读取图片元数据(宽高)';
             return {
                 status: 'error',
                 file: filePath,
-                reason: '无法读取图片元数据(宽高)'
+                reason
             } as OpResult & TExtra;
         }
 
         const baseSharp = sharp(filePath).rotate();
 
+        stage = 'transform';
         const transformOutput = await job.transform({
             filePath,
             sharp: baseSharp,
@@ -139,7 +171,15 @@ export async function executePipeline<TConfig = void, TExtra = Record<string, un
         await ensureDir(outDir);
         outputPath = await allocateFilePath(outDir, baseName, targetExt);
 
-        const encodedPipeline = applyEncoding(pipeline, targetExt);
+        stage = 'save';
+        let encodedPipeline: sharp.Sharp;
+        if (job.encode === false) {
+            encodedPipeline = pipeline;
+        } else if (typeof job.encode === 'function') {
+            encodedPipeline = job.encode(pipeline, targetExt, config);
+        } else {
+            encodedPipeline = applyEncoding(pipeline, targetExt);
+        }
         await encodedPipeline.toFile(outputPath);
 
         return {
@@ -152,7 +192,9 @@ export async function executePipeline<TConfig = void, TExtra = Record<string, un
             await fsp.unlink(outputPath).catch(() => {});
         }
         let errMsg = '未知错误';
-        if (err instanceof Error) {
+        if (typeof job.formatError === 'function') {
+            errMsg = job.formatError(err, stage);
+        } else if (err instanceof Error) {
             errMsg = err.message;
         }
         return {
@@ -175,6 +217,9 @@ export function defineOperator<TConfig, TExtra = Record<string, unknown>>(
             config,
             formatExt,
             destination: descriptor.destination,
+            resolveTargetExt: descriptor.resolveTargetExt,
+            encode: descriptor.encode,
+            formatError: descriptor.formatError,
             transform: descriptor.transform
         });
 }

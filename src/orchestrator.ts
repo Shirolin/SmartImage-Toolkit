@@ -14,8 +14,8 @@ import type {
     PadAspectConfig
 } from './config-types';
 import { isTargetFormat } from './config-types';
-import type { SpinnerLike } from './core';
-import { convertImage } from './core';
+import { processMatting, type SpinnerLike } from './matting';
+import { transcodeImage } from './transcode';
 import { splitImage } from './split';
 import { resizeImage } from './resize';
 import { processTrim, processCrop } from './trim';
@@ -215,10 +215,10 @@ export async function executeTaskOnFile(
             return await processPadAspect(file, task.config, ext);
         }
         case 'rmbg_solid': {
-            return await convertImage(file, 'rmbg_solid', spinner, task.aiModel);
+            return await processMatting(file, { aiModel: task.aiModel, spinner });
         }
         case 'convert': {
-            return await convertImage(file, task.format, spinner);
+            return await transcodeImage(file, { format: task.format });
         }
     }
 }
