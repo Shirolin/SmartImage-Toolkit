@@ -19,29 +19,46 @@ export const SUPPORTED_EXTS: string[] = [
     '.avif'
 ];
 
-/** 遍历过程中被跳过的路径信息（替代原来的 chalk 直接打印） */
-export interface FilesWarning {
-    kind: 'symlink' | 'depth' | 'error';
+/** 发现/遍历过程中被跳过的路径信息 */
+export interface DiscoveryWarning {
+    kind: 'inaccessible' | 'symlink' | 'depth' | 'error';
     path: string;
     message: string;
     /** 仅 depth 告警使用：本次被深度限制截断、未纳入处理的受支持图片数（入口据此计入汇总，避免静默产出缺口） */
     skippedFiles?: number;
 }
 
-export type FilesWarnCallback = (warn: FilesWarning) => void;
+export type DiscoveryWarnCallback = (warn: DiscoveryWarning) => void;
 
-/**
- * 安全地获取给定路径下的所有受支持格式的图片文件
- * @param inputPath 输入的文件或文件夹路径
- * @param maxDepth 最大允许的递归搜索深度
- * @param currentDepth 内部使用的当前递归深度状态
- * @param onWarn 跳过/失败时的通知回调（不传则静默跳过）
- */
-export async function getFiles(
+/** 兼容旧版警告类型别名 */
+export type FilesWarning = DiscoveryWarning;
+export type FilesWarnCallback = DiscoveryWarnCallback;
+
+export interface DiscoveryOptions {
+    /** 最大允许的递归搜索深度（默认 10） */
+    maxDepth?: number;
+    /** 支持的文件扩展名列表（默认 SUPPORTED_EXTS） */
+    supportedExts?: readonly string[];
+    /** 发现告警通知回调 */
+    onWarn?: DiscoveryWarnCallback;
+}
+
+export interface DiscoveryResult {
+    /** 查找到并去重后的文件绝对/相对路径列表 */
+    files: string[];
+    /** 因超出最大深度而被截断的受支持图片总数 */
+    truncatedCount: number;
+    /** 遍历期间收集的所有告警 */
+    warnings: DiscoveryWarning[];
+}
+
+/** 内部递归目录探索函数 */
+async function walkDirectory(
     inputPath: string,
-    maxDepth: number = 10,
-    currentDepth: number = 0,
-    onWarn?: FilesWarnCallback
+    maxDepth: number,
+    currentDepth: number,
+    supportedExts: readonly string[],
+    onWarn?: DiscoveryWarnCallback
 ): Promise<string[]> {
     // 深度判定必须在遍历前一次性完成：写在循环体内会对同一层的每个条目重复告警
     // （第 11 层含 N 个条目即刷 N 条同款黄字），且函数必然返回空。
@@ -68,7 +85,7 @@ export async function getFiles(
     }
 
     if (stats.isFile()) {
-        return SUPPORTED_EXTS.includes(path.extname(inputPath).toLowerCase()) ? [inputPath] : [];
+        return supportedExts.includes(path.extname(inputPath).toLowerCase()) ? [inputPath] : [];
     }
 
     if (!stats.isDirectory()) {
@@ -93,7 +110,7 @@ export async function getFiles(
     // 更深层（子目录内）的文件数不遍历则无从得知，此处只统计本层可直接判定的文件。
     if (depthExceeded) {
         const skippedFiles = entries.filter(
-            (entry) => entry.isFile() && SUPPORTED_EXTS.includes(path.extname(entry.name).toLowerCase())
+            (entry) => entry.isFile() && supportedExts.includes(path.extname(entry.name).toLowerCase())
         ).length;
         onWarn?.({
             kind: 'depth',
@@ -116,13 +133,13 @@ export async function getFiles(
             continue;
         }
         if (entry.isFile()) {
-            if (SUPPORTED_EXTS.includes(path.extname(entry.name).toLowerCase())) {
+            if (supportedExts.includes(path.extname(entry.name).toLowerCase())) {
                 results.push(fullPath);
             }
             continue;
         }
         if (entry.isDirectory()) {
-            subTasks.push(getFiles(fullPath, maxDepth, childDepth, onWarn));
+            subTasks.push(walkDirectory(fullPath, maxDepth, childDepth, supportedExts, onWarn));
             continue;
         }
         // 其它类型（socket、FIFO 等）直接忽略
@@ -132,4 +149,70 @@ export async function getFiles(
         results.push(...sub);
     }
     return results;
+}
+
+/**
+ * 统一深度输入扫描与摄取管线
+ * 吸收多目标归一化、可访问性核验、目录递归探测、符号链接防环、深度截断记账与集合去重
+ *
+ * @param targets 单个路径或路径列表
+ * @param options 扫描配置（最大深度、受支持扩展名、告警回调）
+ */
+export async function discoverInputs(
+    targets: string | readonly string[],
+    options?: DiscoveryOptions
+): Promise<DiscoveryResult> {
+    const list = typeof targets === 'string' ? [targets] : [...targets];
+    const maxDepth = options?.maxDepth ?? 10;
+    const supportedExts = options?.supportedExts ?? SUPPORTED_EXTS;
+    const warnings: DiscoveryWarning[] = [];
+    let truncatedCount = 0;
+
+    const handleWarn: DiscoveryWarnCallback = (warn) => {
+        warnings.push(warn);
+        if (warn.kind === 'depth' && typeof warn.skippedFiles === 'number') {
+            truncatedCount += warn.skippedFiles;
+        }
+        options?.onWarn?.(warn);
+    };
+
+    const allFiles: string[] = [];
+
+    for (const target of list) {
+        try {
+            await fs.promises.access(target);
+        } catch {
+            handleWarn({
+                kind: 'inaccessible',
+                path: target,
+                message: '路径不存在或不可访问，已跳过'
+            });
+            continue;
+        }
+
+        const files = await walkDirectory(target, maxDepth, 0, supportedExts, handleWarn);
+        allFiles.push(...files);
+    }
+
+    return {
+        files: [...new Set(allFiles)],
+        truncatedCount,
+        warnings
+    };
+}
+
+/**
+ * 安全地获取给定路径下的所有受支持格式的图片文件（向后兼容适配器）
+ * @param inputPath 输入的文件或文件夹路径
+ * @param maxDepth 最大允许的递归搜索深度
+ * @param currentDepth 内部使用的当前递归深度状态
+ * @param onWarn 跳过/失败时的通知回调（不传则静默跳过）
+ */
+export async function getFiles(
+    inputPath: string,
+    maxDepth: number = 10,
+    currentDepth: number = 0,
+    onWarn?: FilesWarnCallback
+): Promise<string[]> {
+    return walkDirectory(inputPath, maxDepth, currentDepth, SUPPORTED_EXTS, onWarn);
 }

@@ -1,7 +1,6 @@
-import { promises as fsp } from 'fs';
 import chalk from 'chalk';
 
-import { getFiles } from './utils';
+import { discoverInputs } from './utils';
 import { askFormat, CancelError } from './cli';
 import type { AiModel } from './cli';
 import { EXIT_CANCEL } from './shared/constants';
@@ -128,29 +127,19 @@ export async function main(argv: string[]): Promise<ConvertSummary> {
     console.log(chalk.yellow('🔍 正在检索系统文件，如果文件较多可能需要一点时间...'));
     console.log(chalk.cyan('=====================================================================================\n'));
 
-    let allFiles: string[] = [];
-    let truncatedCount = 0;
-    for (const arg of args) {
-        try {
-            await fsp.access(arg);
-        } catch {
-            console.warn(chalk.yellow(`⚠️ 路径不存在或不可访问，已跳过: ${arg}`));
-            continue;
-        }
-        const files = await getFiles(arg, 10, 0, (warn) => {
+    const { files: allFiles, truncatedCount } = await discoverInputs(args, {
+        onWarn: (warn) => {
             if (warn.kind === 'error') {
                 console.error(chalk.red(`⚠️ [读取跳过] 无法访问路径: ${warn.path} | 错误信息: ${warn.message}`));
             } else if (warn.kind === 'symlink') {
                 console.warn(chalk.yellow(`⚠️ [链接跳过] 检测到软链接，为防止死循环已跳过: ${warn.path}`));
+            } else if (warn.kind === 'inaccessible') {
+                console.warn(chalk.yellow(`⚠️ 路径不存在或不可访问，已跳过: ${warn.path}`));
             } else {
-                if (typeof warn.skippedFiles === 'number') truncatedCount += warn.skippedFiles;
                 console.warn(chalk.yellow(`⚠️ [深度限制] ${warn.message}: ${warn.path}`));
             }
-        });
-        allFiles.push(...files);
-    }
-
-    allFiles = [...new Set(allFiles)];
+        }
+    });
 
     if (allFiles.length === 0) {
         throw new Error('❌ 未找到任何受支持的图片文件。');

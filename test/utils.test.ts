@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
-import { SUPPORTED_EXTS, getFiles, type FilesWarning } from '../src/utils';
+import { SUPPORTED_EXTS, getFiles, discoverInputs, type FilesWarning, type DiscoveryWarning } from '../src/utils';
 import { makeTempDir, createPng } from './helpers';
 
 // 回归用例的临时目录统一登记清理，保证可重复与可并行
@@ -164,5 +164,76 @@ describe('getFiles 受支持扩展名与链接遍历', () => {
         expect(depthWarns).toHaveLength(1); // 同层多个条目也只告警一次
         expect(depthWarns[0].path).toBe(sub);
         expect(depthWarns[0].skippedFiles).toBe(3); // 仅受支持图片：a.png / b.png / c.tif
+    });
+});
+
+describe('discoverInputs', () => {
+    it('接收单个文件字符串并正常发现', async () => {
+        const dir = trackedTempDir();
+        const file = path.join(dir, 'test.png');
+        await createPng(file, 10, 10);
+
+        const result = await discoverInputs(file);
+        expect(result.files).toEqual([file]);
+        expect(result.truncatedCount).toBe(0);
+        expect(result.warnings).toEqual([]);
+    });
+
+    it('多目标数组聚合、按顺序保留且自动去重', async () => {
+        const dir = trackedTempDir();
+        const f1 = path.join(dir, 'a.png');
+        const f2 = path.join(dir, 'b.webp');
+        await createPng(f1, 8, 8);
+        await createPng(f2, 8, 8);
+
+        // 传入重复的路径与包含该路径的父目录
+        const result = await discoverInputs([f1, dir, f1, f2]);
+        expect(result.files.sort()).toEqual([f1, f2].sort());
+        expect(result.files).toHaveLength(2); // Set 去重
+        expect(result.truncatedCount).toBe(0);
+    });
+
+    it('不可访问路径上报 inaccessible 告警且不中断其余路径', async () => {
+        const dir = trackedTempDir();
+        const validFile = path.join(dir, 'valid.png');
+        await createPng(validFile, 8, 8);
+        const ghost = path.join(dir, 'ghost_missing.png');
+
+        const callbackWarns: DiscoveryWarning[] = [];
+        const result = await discoverInputs([ghost, validFile], {
+            onWarn: (w) => callbackWarns.push(w)
+        });
+
+        expect(result.files).toEqual([validFile]);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0].kind).toBe('inaccessible');
+        expect(result.warnings[0].path).toBe(ghost);
+        expect(callbackWarns).toEqual(result.warnings);
+    });
+
+    it('深度超限时自动聚合截断图片数至 truncatedCount', async () => {
+        const dir = trackedTempDir();
+        const rootFile = path.join(dir, 'root.png');
+        await createPng(rootFile, 8, 8);
+        const sub = path.join(dir, 'sub');
+        fs.mkdirSync(sub);
+        await createPng(path.join(sub, 'a.png'), 8, 8);
+        await createPng(path.join(sub, 'b.png'), 8, 8);
+
+        const result = await discoverInputs(dir, { maxDepth: 1 });
+        expect(result.files).toEqual([rootFile]);
+        expect(result.truncatedCount).toBe(2);
+        expect(result.warnings.some((w) => w.kind === 'depth')).toBe(true);
+    });
+
+    it('支持自定义 supportedExts 过滤特定格式', async () => {
+        const dir = trackedTempDir();
+        const png = path.join(dir, 'img.png');
+        const webp = path.join(dir, 'img.webp');
+        await createPng(png, 8, 8);
+        await createPng(webp, 8, 8);
+
+        const result = await discoverInputs(dir, { supportedExts: ['.png'] });
+        expect(result.files).toEqual([png]);
     });
 });
