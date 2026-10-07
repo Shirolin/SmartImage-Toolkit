@@ -56,3 +56,11 @@
 
 纯领域的交互配置采集工作流（`src/prompt/wizards/`）。接收 `PromptDriver` 驱动实例，专注完成多步参数引导、回退分支跳转与强类型配置对象构建，对具体终端流与输入载体零感知。
 
+### GridGeometry（纯网格几何计算）
+
+纯纯函数级几何计算模块（`src/shared/geometry.ts`），零 I/O、零 Sharp 依赖。统管切分线单调性校验、端点百分比防浮点漂移取整算法（`Math.round((i * W) / total)`）、瓦片拓扑边界有效性核验、切片总数防爆上限拦截（`MAX_TILES`）与排查标尺 SVG 渲染。
+
+### Single-Pass Slicing（单阶段切图管线）
+
+在内存 Sharp 管道内直接串联瓦片提取、居中修剪扩边（CLI 模式或 Web 端 `CenterConfig`）与格式编码，单次落盘至目标目录，彻底消灭二次磁盘读写往返与中间未居中临时文件。
+

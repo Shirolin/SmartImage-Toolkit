@@ -91,23 +91,8 @@ export class PathSandbox {
     }
 }
 
-/** 切分线守卫：数组、长度 2..100、全为非负整数（须为整数）、严格递增 */
-export function isValidCutArray(value: unknown): value is number[] {
-    if (!Array.isArray(value)) return false;
-    if (value.length < 2 || value.length > 100) return false;
-    for (const item of value) {
-        if (typeof item !== 'number' || !Number.isFinite(item) || !Number.isInteger(item) || item < 0) return false;
-    }
-    for (let i = 1; i < value.length; i++) {
-        if (value[i] <= value[i - 1]) return false;
-    }
-    return true;
-}
-
-/** 切片总数：(cutX.length-1)*(cutY.length-1)，供路由上限守卫与单测共用 */
-export function countSplitTiles(cutX: number[], cutY: number[]): number {
-    return (cutX.length - 1) * (cutY.length - 1);
-}
+import { isValidCutArray, countSplitTiles } from '../shared/geometry';
+export { isValidCutArray, countSplitTiles };
 
 const CENTER_SIDES = new Set(['top', 'bottom', 'left', 'right']);
 const CENTER_FORMATS = new Set(['original', 'webp', 'png', 'mozjpeg']);

@@ -11,4 +11,5 @@ export interface SplitResult extends OpResult {
     generatedFiles: string[];
     artifacts: string[];
     failedTiles?: Array<{ row: number; col: number; reason: string }>;
+    centerFailures?: Array<{ file: string; reason: string }>;
 }

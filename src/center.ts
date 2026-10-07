@@ -14,73 +14,139 @@ export interface TileCenterOptions {
     threshold?: number;
 }
 
+/** 切片内存级居中统一配置类型 */
+export type TileCenterPlan = TileCenterOptions | CenterConfig;
+
 /**
  * 专为切片提供的内存级居中变换：
- * 消除边缘杂边、探查背景色、trim 纯色边，并在保持原比例或正方形画布中居中放置
+ * 支持 CLI 经典比例/方块居中，以及 Web 智能探测居中；纯内存计算，直接返回变换就绪的 Sharp 管道
  */
 export async function centerTileBuffer(
     tileBuffer: Buffer,
     dimensions: { width: number; height: number },
-    options: TileCenterOptions
+    options: TileCenterPlan
 ): Promise<sharp.Sharp> {
     const { width: tileWidth, height: tileHeight } = dimensions;
-    const shave = options.edgeShave || 0;
-    const shavedBuffer =
-        shave > 0 && tileWidth > shave * 2 && tileHeight > shave * 2
-            ? await sharp(tileBuffer)
-                  .extract({
-                      left: shave,
-                      top: shave,
-                      width: tileWidth - shave * 2,
-                      height: tileHeight - shave * 2
-                  })
-                  .toBuffer()
-            : tileBuffer;
 
-    // 从干净 Buffer 提取基准背景色
-    const { data, info } = await sharp(shavedBuffer)
-        .extract({ left: 0, top: 0, width: 1, height: 1 })
-        .raw()
-        .toBuffer({ resolveWithObject: true });
+    // 分支 1：CLI 经典模式（按比例留白或扩充正方形）
+    if ('centerMode' in options && (options.centerMode === 'keep_ratio' || options.centerMode === 'square')) {
+        const shave = options.edgeShave || 0;
+        const shavedBuffer =
+            shave > 0 && tileWidth > shave * 2 && tileHeight > shave * 2
+                ? await sharp(tileBuffer)
+                      .extract({
+                          left: shave,
+                          top: shave,
+                          width: tileWidth - shave * 2,
+                          height: tileHeight - shave * 2
+                      })
+                      .toBuffer()
+                : tileBuffer;
 
-    const r = data[0];
-    const g = data[1];
-    const b = data[2];
-    const alpha = info.channels === 4 ? data[3] : 255;
+        // 从干净 Buffer 提取基准背景色
+        const { data, info } = await sharp(shavedBuffer)
+            .extract({ left: 0, top: 0, width: 1, height: 1 })
+            .raw()
+            .toBuffer({ resolveWithObject: true });
 
-    // 修剪空白边缘
-    const trimmedBuffer = await sharp(shavedBuffer)
-        .trim({
-            background: { r, g, b, alpha },
-            threshold: options.threshold ?? SPLIT_TRIM_THRESHOLD
-        })
-        .toBuffer();
+        const r = data[0];
+        const g = data[1];
+        const b = data[2];
+        const alpha = info.channels === 4 ? data[3] : 255;
 
-    const trimMeta = await sharp(trimmedBuffer).metadata();
-    const coreWidth = trimMeta.width || tileWidth;
-    const coreHeight = trimMeta.height || tileHeight;
+        // 修剪空白边缘
+        const trimmedBuffer = await sharp(shavedBuffer)
+            .trim({
+                background: { r, g, b, alpha },
+                threshold: options.threshold ?? SPLIT_TRIM_THRESHOLD
+            })
+            .toBuffer();
 
-    let finalCanvasWidth = tileWidth;
-    let finalCanvasHeight = tileHeight;
+        const trimMeta = await sharp(trimmedBuffer).metadata();
+        const coreWidth = trimMeta.width || tileWidth;
+        const coreHeight = trimMeta.height || tileHeight;
 
-    if (options.centerMode === 'square') {
-        const maxSize = Math.max(tileWidth, tileHeight);
-        finalCanvasWidth = maxSize;
-        finalCanvasHeight = maxSize;
+        let finalCanvasWidth = tileWidth;
+        let finalCanvasHeight = tileHeight;
+
+        if (options.centerMode === 'square') {
+            const maxSize = Math.max(tileWidth, tileHeight);
+            finalCanvasWidth = maxSize;
+            finalCanvasHeight = maxSize;
+        }
+
+        const extendLeft = Math.floor((finalCanvasWidth - coreWidth) / 2);
+        const extendRight = finalCanvasWidth - coreWidth - extendLeft;
+        const extendTop = Math.floor((finalCanvasHeight - coreHeight) / 2);
+        const extendBottom = finalCanvasHeight - coreHeight - extendTop;
+
+        return sharp(trimmedBuffer).extend({
+            top: extendTop,
+            bottom: extendBottom,
+            left: extendLeft,
+            right: extendRight,
+            background: { r, g, b, alpha }
+        });
     }
 
-    const extendLeft = Math.floor((finalCanvasWidth - coreWidth) / 2);
-    const extendRight = finalCanvasWidth - coreWidth - extendLeft;
-    const extendTop = Math.floor((finalCanvasHeight - coreHeight) / 2);
-    const extendBottom = finalCanvasHeight - coreHeight - extendTop;
+    // 分支 2：Web 智能居中模式（主体探测与轴向边距平衡）
+    const centerCfg = options as CenterConfig;
+    const threshold = centerCfg.threshold ?? 10;
+    const { info: probeInfo } = await sharp(tileBuffer).trim({ threshold }).raw().toBuffer({ resolveWithObject: true });
 
-    return sharp(trimmedBuffer).extend({
-        top: extendTop,
-        bottom: extendBottom,
-        left: extendLeft,
-        right: extendRight,
-        background: { r, g, b, alpha }
-    });
+    const contentLeft = Math.abs(probeInfo.trimOffsetLeft || 0);
+    const contentTop = Math.abs(probeInfo.trimOffsetTop || 0);
+    const contentW = probeInfo.width;
+    const contentH = probeInfo.height;
+
+    const totalHorizontalMargin = tileWidth - contentW;
+    const totalVerticalMargin = tileHeight - contentH;
+
+    const allowedSides = centerCfg.sides || ['top', 'bottom', 'left', 'right'];
+    const hasTop = allowedSides.includes('top');
+    const hasBottom = allowedSides.includes('bottom');
+    const hasLeft = allowedSides.includes('left');
+    const hasRight = allowedSides.includes('right');
+
+    const padding = {
+        top: 0,
+        bottom: 0,
+        left: 0,
+        right: 0
+    };
+
+    if (hasTop && hasBottom) {
+        padding.top = Math.floor(totalVerticalMargin / 2);
+        padding.bottom = totalVerticalMargin - padding.top;
+    } else if (hasTop) {
+        padding.top = totalVerticalMargin;
+    } else if (hasBottom) {
+        padding.bottom = totalVerticalMargin;
+    }
+
+    if (hasLeft && hasRight) {
+        padding.left = Math.floor(totalHorizontalMargin / 2);
+        padding.right = totalHorizontalMargin - padding.left;
+    } else if (hasLeft) {
+        padding.left = totalHorizontalMargin;
+    } else if (hasRight) {
+        padding.right = totalHorizontalMargin;
+    }
+
+    const fillColor = centerCfg.fillColor || 'transparent';
+    const bg = fillColor === 'transparent' ? { r: 0, g: 0, b: 0, alpha: 0 } : fillColor;
+
+    return sharp(tileBuffer)
+        .extract({
+            left: contentLeft,
+            top: contentTop,
+            width: contentW,
+            height: contentH
+        })
+        .extend({
+            ...padding,
+            background: bg
+        });
 }
 
 /**
