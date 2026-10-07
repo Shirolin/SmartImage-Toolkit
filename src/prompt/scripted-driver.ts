@@ -1,5 +1,5 @@
 import { CancelError } from '../config-types';
-import type { Choice, PromptDriver } from './driver';
+import type { Choice, PromptDriver, SelectOptions, InputOptions } from './driver';
 
 export interface ScriptStep {
     /** 预期的提示文案关键词（可选校验） */
@@ -44,7 +44,11 @@ export class ScriptedPromptDriver implements PromptDriver {
 
     clear(): void {}
 
-    async select<T>(message: string, choices: readonly Choice<T>[]): Promise<T> {
+    select<T>(options: SelectOptions<T>): Promise<T>;
+    select<T>(message: string, choices: readonly Choice<T>[]): Promise<T>;
+    async select<T>(optionsOrMessage: SelectOptions<T> | string, choicesParam?: readonly Choice<T>[]): Promise<T> {
+        const message = typeof optionsOrMessage === 'string' ? optionsOrMessage : optionsOrMessage.message;
+        const choices = typeof optionsOrMessage === 'string' ? choicesParam! : optionsOrMessage.choices;
         const step = this.nextStep('select', message);
         if (step.cancel) {
             throw new CancelError('脚本模拟用户中断选择');
@@ -73,6 +77,30 @@ export class ScriptedPromptDriver implements PromptDriver {
             throw new CancelError('脚本模拟用户中断输入');
         }
         return step.reply.trim();
+    }
+
+    async input<T = string>(options: InputOptions<T>): Promise<T | 'back'> {
+        while (true) {
+            const raw = (await this.question(options.prompt)).trim();
+
+            if (options.allowBack && raw === '0') {
+                return 'back';
+            }
+
+            if (raw === '' && options.default !== undefined) {
+                return options.transform ? options.transform(options.default) : (options.default as unknown as T);
+            }
+
+            if (options.validate) {
+                const validation = options.validate(raw);
+                if (validation !== true) {
+                    this.notify(validation, 'error');
+                    continue;
+                }
+            }
+
+            return options.transform ? options.transform(raw) : (raw as unknown as T);
+        }
     }
 
     private nextStep(kind: 'select' | 'question', actualPrompt: string): ScriptStep {

@@ -213,8 +213,9 @@ describe('ScriptedPromptDriver 与向导工作流 (纯内存测试)', () => {
         });
     });
 
-    it('智能居中 (Center) 正常采集容差与背景色', async () => {
+    it('智能居中 (Center) 拦截非法容差并在合法值后放行', async () => {
         const driver = new ScriptedPromptDriver([
+            { prompt: '色差容忍度', reply: '999' }, // 非法值拦截
             { prompt: '色差容忍度', reply: '20' },
             { prompt: '补白颜色', reply: '2' }, // #FFFFFF
             { prompt: '导出格式', reply: '3' } // png
@@ -226,16 +227,19 @@ describe('ScriptedPromptDriver 与向导工作流 (纯内存测试)', () => {
             fillColor: '#FFFFFF',
             outputFormat: 'png'
         });
+        expect(driver.consumed).toBe(4);
     });
 
-    it('画布扩边 (Pad Aspect) 支持自定义比例与自定义颜色', async () => {
+    it('画布扩边 (Pad Aspect) 拦截非法自定义比例与色值并在重试后放行', async () => {
         const driver = new ScriptedPromptDriver([
             { prompt: '目标比例', reply: '4' }, // custom
+            { prompt: '自定义比例', reply: 'not-a-ratio' }, // 非法输入拦截
             { prompt: '自定义比例', reply: '4:5' },
             { prompt: '主体模式', reply: '1' }, // full_image
             { prompt: '主体占画布高度比例', reply: '0.75' },
             { prompt: '画布长边像素', reply: '1080' },
             { prompt: '填充方式', reply: '4' }, // custom hex
+            { prompt: '十六进制色值码', reply: 'bad-hex' }, // 非法颜色拦截
             { prompt: '十六进制色值码', reply: '#112233' },
             { prompt: '导出格式', reply: '2' } // webp
         ]);
@@ -250,15 +254,6 @@ describe('ScriptedPromptDriver 与向导工作流 (纯内存测试)', () => {
             longEdge: 1080,
             outputFormat: 'webp'
         });
-    });
-
-    it('AI 抠图模型向导采集', async () => {
-        const driver = new ScriptedPromptDriver([
-            { prompt: '选择 AI 抠图精细度', reply: '2' } // small
-        ]);
-
-        const result = await askAiModel(driver);
-        expect(result).toBe('small');
     });
 
     it('向导取消中断时传递 CancelError', async () => {

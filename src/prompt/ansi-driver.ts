@@ -1,8 +1,7 @@
 import readline from 'readline';
 import chalk from 'chalk';
 import { CancelError } from '../config-types';
-import type { Choice, PromptDriver } from './driver';
-import { registerDefaultPromptDriverFactory } from './driver';
+import type { Choice, PromptDriver, SelectOptions, InputOptions } from './driver';
 
 interface LineWaiter {
     deliver: (line: string) => void;
@@ -14,15 +13,18 @@ interface LineWaiter {
  * 封装底层的 ANSI 光标控制、TTY RawMode、按键事件与会话级 Readline 缓冲队列。
  */
 export class AnsiTerminalDriver implements PromptDriver {
-    private readonly input: NodeJS.ReadableStream;
-    private readonly output: NodeJS.WritableStream;
+    private readonly inputStream: NodeJS.ReadableStream;
+    private readonly outputStream: NodeJS.WritableStream;
     private questionReader: readline.Interface | null = null;
     private readonly bufferedLines: string[] = [];
     private readonly lineWaiters: LineWaiter[] = [];
 
-    constructor(input: NodeJS.ReadableStream = process.stdin, output: NodeJS.WritableStream = process.stdout) {
-        this.input = input;
-        this.output = output;
+    constructor(
+        inputStream: NodeJS.ReadableStream = process.stdin,
+        outputStream: NodeJS.WritableStream = process.stdout
+    ) {
+        this.inputStream = inputStream;
+        this.outputStream = outputStream;
     }
 
     renderHeader(breadcrumb: string): void {
@@ -53,7 +55,12 @@ export class AnsiTerminalDriver implements PromptDriver {
         console.clear();
     }
 
-    async select<T>(message: string, choices: readonly Choice<T>[]): Promise<T> {
+    select<T>(options: SelectOptions<T>): Promise<T>;
+    select<T>(message: string, choices: readonly Choice<T>[]): Promise<T>;
+    async select<T>(optionsOrMessage: SelectOptions<T> | string, choicesParam?: readonly Choice<T>[]): Promise<T> {
+        const message = typeof optionsOrMessage === 'string' ? optionsOrMessage : optionsOrMessage.message;
+        const choices = typeof optionsOrMessage === 'string' ? choicesParam! : optionsOrMessage.choices;
+
         // 菜单独占 stdin：先释放共享的 questionReader，否则它会同时消费按键
         this.releaseQuestionReader();
 
@@ -62,16 +69,16 @@ export class AnsiTerminalDriver implements PromptDriver {
             let renderedLines = 0;
             let settled = false;
 
-            const inStream = this.input as NodeJS.ReadStream;
-            const outStream = this.output as NodeJS.WriteStream;
+            const inStream = this.inputStream as NodeJS.ReadStream;
+            const outStream = this.outputStream as NodeJS.WriteStream;
 
             const rl = readline.createInterface({
-                input: this.input,
-                output: this.output,
+                input: this.inputStream,
+                output: this.outputStream,
                 terminal: true
             });
 
-            readline.emitKeypressEvents(this.input);
+            readline.emitKeypressEvents(this.inputStream);
             if (inStream.isTTY && typeof inStream.setRawMode === 'function') {
                 inStream.setRawMode(true);
             }
@@ -247,12 +254,36 @@ export class AnsiTerminalDriver implements PromptDriver {
         }
     }
 
+    async input<T = string>(options: InputOptions<T>): Promise<T | 'back'> {
+        while (true) {
+            const raw = (await this.question(options.prompt)).trim();
+
+            if (options.allowBack && raw === '0') {
+                return 'back';
+            }
+
+            if (raw === '' && options.default !== undefined) {
+                return options.transform ? options.transform(options.default) : (options.default as unknown as T);
+            }
+
+            if (options.validate) {
+                const validation = options.validate(raw);
+                if (validation !== true) {
+                    this.notify(validation, 'error');
+                    continue;
+                }
+            }
+
+            return options.transform ? options.transform(raw) : (raw as unknown as T);
+        }
+    }
+
     private getQuestionReader(): readline.Interface {
         if (this.questionReader) return this.questionReader;
 
         const rl = readline.createInterface({
-            input: this.input,
-            output: this.output
+            input: this.inputStream,
+            output: this.outputStream
         });
 
         rl.on('line', (line: string) => {
@@ -280,6 +311,3 @@ export class AnsiTerminalDriver implements PromptDriver {
         return rl;
     }
 }
-
-// 自动注册默认驱动工厂
-registerDefaultPromptDriverFactory(() => new AnsiTerminalDriver());

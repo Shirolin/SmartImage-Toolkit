@@ -15,6 +15,14 @@ export interface Choice<T> {
 }
 
 /**
+ * 离散单选选项配置
+ */
+export interface SelectOptions<T> {
+    readonly message: string;
+    readonly choices: readonly Choice<T>[];
+}
+
+/**
  * 行输入校验与转换配置
  */
 export interface InputOptions<T = string> {
@@ -33,16 +41,29 @@ export interface InputOptions<T = string> {
 /**
  * 交互提示驱动器模块接口（PromptDriver Interface）
  * 坐落在领域向导工作流与具体输入输出基础设施之间的接缝上。
+ * 核心暴露 select、input、notify 三大原子操作。
  */
 export interface PromptDriver {
     /**
      * 呈现单选菜单并等待用户确认一个选项
      * @throws {CancelError} 用户主动按下 Ctrl+C 或底层输入流 EOF
      */
+    select<T>(options: SelectOptions<T>): Promise<T>;
     select<T>(message: string, choices: readonly Choice<T>[]): Promise<T>;
 
     /**
-     * 呈现文本提问并采集单行原始输入
+     * 采集行文本输入，并在驱动内自闭环完成输入校验（validate）、错误提示重问与类型映射（transform）
+     * @throws {CancelError} 用户主动按下 Ctrl+C 或底层输入流 EOF
+     */
+    input<T = string>(options: InputOptions<T>): Promise<T | 'back'>;
+
+    /**
+     * 输出即时状态通知或校验反馈
+     */
+    notify(message: string, type?: 'info' | 'warn' | 'error'): void;
+
+    /**
+     * 呈现文本提问并采集单行原始输入（底层辅助方法）
      * @throws {CancelError} 用户主动按下 Ctrl+C 或底层输入流 EOF
      */
     question(query: string): Promise<string>;
@@ -53,37 +74,24 @@ export interface PromptDriver {
     renderHeader(breadcrumb: string): void;
 
     /**
-     * 输出即时状态通知或校验反馈
-     */
-    notify(message: string, type?: 'info' | 'warn' | 'error'): void;
-
-    /**
      * 清理终端屏幕或重绘缓冲区
      */
     clear(): void;
 }
 
 let defaultDriverInstance: PromptDriver | null = null;
-let defaultDriverFactory: (() => PromptDriver) | null = null;
 
 /**
- * 注册默认驱动工厂（用于解耦生产适配器初始化）
- */
-export function registerDefaultPromptDriverFactory(factory: () => PromptDriver): void {
-    defaultDriverFactory = factory;
-}
-
-/**
- * 获取当前全局默认 PromptDriver 实例（惰性单例）
+ * 获取当前全局默认 PromptDriver 实例（惰性单例，直接绑定生产 AnsiTerminalDriver）
  */
 export function getDefaultPromptDriver(): PromptDriver {
     if (!defaultDriverInstance) {
-        if (!defaultDriverFactory) {
-            throw new Error('PromptDriver: 默认驱动工厂未注册');
-        }
-        defaultDriverInstance = defaultDriverFactory();
+        // 动态引入生产驱动，避免顶层循环依赖与未使用的端侧加载开销
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { AnsiTerminalDriver } = require('./ansi-driver');
+        defaultDriverInstance = new AnsiTerminalDriver();
     }
-    return defaultDriverInstance;
+    return defaultDriverInstance!;
 }
 
 /**

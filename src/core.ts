@@ -9,7 +9,8 @@ export type { SpinnerLike };
 
 /**
  * 图像处理核心网关兼容适配器（Adapter）
- * 消除全部手动文件 I/O，统一路由至 transcodeImage 与 processMatting 纯算子
+ * @deprecated 核心管线已下沉，生产环境已直调 transcodeImage 与 processMatting 纯算子。
+ * 本函数作为向后兼容适配器保留，消除全部手动文件 I/O 并统一路由至对应算子。
  */
 export async function convertImage(
     filePath: string,

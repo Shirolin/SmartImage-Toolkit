@@ -1,4 +1,4 @@
-﻿# SmartImage-Toolkit 离线打包工具
+# SmartImage-Toolkit 离线打包工具
 # 用途：为非程序员朋友生成一个“解压即用”的绿色安装包
 
 $ScriptDir = $PSScriptRoot
@@ -82,6 +82,10 @@ $ItemsToCopy = @(
     "src/config-types.ts",
     "src/prompts.ts",
     "src/core.ts",
+    "src/transcode.ts",
+    "src/matting.ts",
+    "src/prompt",
+    "src/server",
     "src/utils.ts",
     "src/trim.ts",
     "src/center.ts",

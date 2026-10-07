@@ -4,8 +4,8 @@ import { getDefaultPromptDriver } from './prompt/driver';
 import type { TrimCropAnswer } from './prompt/wizards';
 
 // 导出核心类型与驱动接口
-export type { Choice, InputOptions, PromptDriver } from './prompt/driver';
-export { getDefaultPromptDriver, setDefaultPromptDriver, registerDefaultPromptDriverFactory } from './prompt/driver';
+export type { Choice, SelectOptions, InputOptions, PromptDriver } from './prompt/driver';
+export { getDefaultPromptDriver, setDefaultPromptDriver } from './prompt/driver';
 export { AnsiTerminalDriver } from './prompt/ansi-driver';
 export { ScriptedPromptDriver, type ScriptStep } from './prompt/scripted-driver';
 export type { TrimCropAnswer } from './prompt/wizards';

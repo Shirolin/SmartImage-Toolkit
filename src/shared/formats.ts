@@ -1,6 +1,6 @@
 // 扩展名归一化：全链路统一大小写与 jpeg/jpg 别名
 // 支持的输入格式名
-export type ImageFormat = 'webp' | 'png' | 'avif' | 'mozjpeg' | 'original';
+export type ImageFormat = 'webp' | 'png' | 'avif' | 'mozjpeg' | 'original' | 'jpg';
 // 切片导出后缀集合
 export type SPLIT_FORMATS = '.webp' | '.png' | '.jpg';
 
@@ -22,15 +22,19 @@ export function normalizeExt(ext: string): string {
 export function resolveImageExt(format: 'webp', fallbackExt: string): '.webp';
 export function resolveImageExt(format: 'png', fallbackExt: string): '.png';
 export function resolveImageExt(format: 'avif', fallbackExt: string): '.avif';
-export function resolveImageExt(format: 'mozjpeg', fallbackExt: string): '.jpg';
-export function resolveImageExt(format: 'webp' | 'png' | 'mozjpeg', fallbackExt: string): '.webp' | '.png' | '.jpg';
+export function resolveImageExt(format: 'mozjpeg' | 'jpg', fallbackExt: string): '.jpg';
 export function resolveImageExt(
-    format: 'webp' | 'png' | 'avif' | 'mozjpeg',
+    format: 'webp' | 'png' | 'mozjpeg' | 'jpg',
+    fallbackExt: string
+): '.webp' | '.png' | '.jpg';
+export function resolveImageExt(
+    format: 'webp' | 'png' | 'avif' | 'mozjpeg' | 'jpg',
     fallbackExt: string
 ): '.webp' | '.png' | '.avif' | '.jpg';
 export function resolveImageExt(format: 'original', fallbackExt: string): string;
+export function resolveImageExt(format: ImageFormat, fallbackExt: string): string;
 export function resolveImageExt(format: ImageFormat, fallbackExt: string): string {
-    if (format === 'mozjpeg') {
+    if (format === 'mozjpeg' || format === 'jpg') {
         return '.jpg';
     }
     if (format === 'original') {

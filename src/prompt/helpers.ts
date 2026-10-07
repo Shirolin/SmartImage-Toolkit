@@ -3,30 +3,10 @@ import { MAX_DIM, MAX_PERCENT } from '../shared/constants';
 import { parseFillColor as parseFillColorInput } from '../pad-aspect';
 
 /**
- * 通用带自闭环校验重试的行输入采集器
+ * 通用带自闭环校验重试的行输入采集器（委托至驱动原子 input 方法）
  */
 export async function askInput<T = string>(driver: PromptDriver, options: InputOptions<T>): Promise<T | 'back'> {
-    while (true) {
-        const raw = (await driver.question(options.prompt)).trim();
-
-        if (options.allowBack && raw === '0') {
-            return 'back';
-        }
-
-        if (raw === '' && options.default !== undefined) {
-            return options.transform ? options.transform(options.default) : (options.default as unknown as T);
-        }
-
-        if (options.validate) {
-            const validation = options.validate(raw);
-            if (validation !== true) {
-                driver.notify(validation, 'error');
-                continue;
-            }
-        }
-
-        return options.transform ? options.transform(raw) : (raw as unknown as T);
-    }
+    return driver.input(options);
 }
 
 /**

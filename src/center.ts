@@ -94,15 +94,56 @@ export async function centerTileBuffer(
     const threshold = centerCfg.threshold ?? 10;
     const { info: probeInfo } = await sharp(tileBuffer).trim({ threshold }).raw().toBuffer({ resolveWithObject: true });
 
+    const layout = calculateSmartCenterLayout(probeInfo, tileWidth, tileHeight, centerCfg);
+    if (!layout) {
+        return sharp(tileBuffer);
+    }
+
+    return sharp(tileBuffer)
+        .extract({
+            left: layout.contentLeft,
+            top: layout.contentTop,
+            width: layout.contentW,
+            height: layout.contentH
+        })
+        .extend({
+            ...layout.padding,
+            background: layout.background
+        });
+}
+
+interface SmartCenterLayout {
+    contentLeft: number;
+    contentTop: number;
+    contentW: number;
+    contentH: number;
+    padding: { top: number; bottom: number; left: number; right: number };
+    background: sharp.Color;
+}
+
+/**
+ * 纯居中布局计算：主体 Bounding Box 提取、四向边距平衡与填充背景解析
+ * 包含空图/纯色图（width/height <= 0）防爆保护，返回 null 表示无需提取与补白
+ */
+function calculateSmartCenterLayout(
+    probeInfo: { width?: number; height?: number; trimOffsetLeft?: number; trimOffsetTop?: number },
+    canvasWidth: number,
+    canvasHeight: number,
+    config: CenterConfig
+): SmartCenterLayout | null {
+    const contentW = probeInfo.width ?? 0;
+    const contentH = probeInfo.height ?? 0;
+    if (contentW <= 0 || contentH <= 0) {
+        return null; // 空图或纯色图被 trim 全部削去：无需裁剪拓展
+    }
+
     const contentLeft = Math.abs(probeInfo.trimOffsetLeft || 0);
     const contentTop = Math.abs(probeInfo.trimOffsetTop || 0);
-    const contentW = probeInfo.width;
-    const contentH = probeInfo.height;
 
-    const totalHorizontalMargin = tileWidth - contentW;
-    const totalVerticalMargin = tileHeight - contentH;
+    const totalHorizontalMargin = canvasWidth - contentW;
+    const totalVerticalMargin = canvasHeight - contentH;
 
-    const allowedSides = centerCfg.sides || ['top', 'bottom', 'left', 'right'];
+    const allowedSides = config.sides || ['top', 'bottom', 'left', 'right'];
     const hasTop = allowedSides.includes('top');
     const hasBottom = allowedSides.includes('bottom');
     const hasLeft = allowedSides.includes('left');
@@ -133,20 +174,17 @@ export async function centerTileBuffer(
         padding.right = totalHorizontalMargin;
     }
 
-    const fillColor = centerCfg.fillColor || 'transparent';
-    const bg = fillColor === 'transparent' ? { r: 0, g: 0, b: 0, alpha: 0 } : fillColor;
+    const fillColor = config.fillColor || 'transparent';
+    const background = fillColor === 'transparent' ? { r: 0, g: 0, b: 0, alpha: 0 } : fillColor;
 
-    return sharp(tileBuffer)
-        .extract({
-            left: contentLeft,
-            top: contentTop,
-            width: contentW,
-            height: contentH
-        })
-        .extend({
-            ...padding,
-            background: bg
-        });
+    return {
+        contentLeft,
+        contentTop,
+        contentW,
+        contentH,
+        padding,
+        background
+    };
 }
 
 /**
@@ -167,62 +205,24 @@ export const processCenter = defineOperator<CenterConfig>({
             .raw()
             .toBuffer({ resolveWithObject: true });
 
-        // probeInfo.trimOffsetLeft 和 trimOffsetTop 是负值，代表左侧和顶部被切掉的像素
-        const contentLeft = Math.abs(probeInfo.trimOffsetLeft || 0);
-        const contentTop = Math.abs(probeInfo.trimOffsetTop || 0);
-        const contentW = probeInfo.width;
-        const contentH = probeInfo.height;
-
-        // 2. 计算轴向总可用边距 (Total Margins)
-        const totalHorizontalMargin = originalW - contentW;
-        const totalVerticalMargin = originalH - contentH;
-
-        const allowedSides = config.sides || ['top', 'bottom', 'left', 'right'];
-        const hasTop = allowedSides.includes('top');
-        const hasBottom = allowedSides.includes('bottom');
-        const hasLeft = allowedSides.includes('left');
-        const hasRight = allowedSides.includes('right');
-
-        // 3. 应用轴向分配逻辑 (Alignment Distribution)
-        const padding = {
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0
-        };
-
-        // 垂直轴处理
-        if (hasTop && hasBottom) {
-            padding.top = Math.floor(totalVerticalMargin / 2);
-            padding.bottom = totalVerticalMargin - padding.top;
-        } else if (hasTop) {
-            padding.top = totalVerticalMargin;
-        } else if (hasBottom) {
-            padding.bottom = totalVerticalMargin;
+        // 2. 纯计算居中排版与边距
+        const layout = calculateSmartCenterLayout(probeInfo, originalW, originalH, config);
+        if (!layout) {
+            return sharpPipeline.clone();
         }
 
-        // 水平轴处理
-        if (hasLeft && hasRight) {
-            padding.left = Math.floor(totalHorizontalMargin / 2);
-            padding.right = totalHorizontalMargin - padding.left;
-        } else if (hasLeft) {
-            padding.left = totalHorizontalMargin;
-        } else if (hasRight) {
-            padding.right = totalHorizontalMargin;
-        }
-
-        // 4. 构建并返回变换后 Sharp 管道（编码与落盘由流水线托管）
+        // 3. 构建并返回变换后 Sharp 管道（编码与落盘由流水线托管）
         return sharpPipeline
             .clone()
             .extract({
-                left: contentLeft,
-                top: contentTop,
-                width: contentW,
-                height: contentH
+                left: layout.contentLeft,
+                top: layout.contentTop,
+                width: layout.contentW,
+                height: layout.contentH
             })
             .extend({
-                ...padding,
-                background: config.fillColor === 'transparent' ? { r: 0, g: 0, b: 0, alpha: 0 } : config.fillColor
+                ...layout.padding,
+                background: layout.background
             });
     }
 });

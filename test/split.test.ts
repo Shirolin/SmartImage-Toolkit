@@ -96,4 +96,41 @@ describe('splitImage EXIF 方向', () => {
             expect(meta.height).toBe(100);
         }
     });
+
+    it('centerConfig.outputFormat 为 original 时保留源图扩展名', async () => {
+        const dir = trackedTempDir();
+        const src = path.join(dir, 'photo.png');
+        await createPng(src, 100, 100);
+
+        const result = await splitImage(src, {
+            rows: 2,
+            cols: 2,
+            centerConfig: { threshold: 10, fillColor: 'transparent', outputFormat: 'original' }
+        });
+
+        expect(result.status).toBe('success');
+        expect(result.generatedFiles).toHaveLength(4);
+        for (const file of result.generatedFiles) {
+            expect(file.endsWith('.png')).toBe(true);
+        }
+    });
+
+    it('全透明切片执行智能居中时防爆保护生效，不误报 centerFailures', async () => {
+        const dir = trackedTempDir();
+        const src = path.join(dir, 'transparent.png');
+        // 创建完全透明的图片
+        await sharp({ create: { width: 100, height: 100, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+            .png()
+            .toFile(src);
+
+        const result = await splitImage(src, {
+            rows: 2,
+            cols: 2,
+            centerConfig: { threshold: 10, fillColor: 'transparent' }
+        });
+
+        expect(result.status).toBe('success');
+        expect(result.generatedFiles).toHaveLength(4);
+        expect(result.centerFailures).toBeUndefined();
+    });
 });

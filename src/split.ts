@@ -42,10 +42,10 @@ export async function splitImage(
     const artifacts: string[] = [];
     let outDir: string | undefined;
 
-    // 格式后缀解析：若 centerConfig 显式指定非 original 格式则优先应用
-    let resolvedExt = formatExt;
-    if (options.centerConfig?.outputFormat && options.centerConfig.outputFormat !== 'original') {
-        resolvedExt = resolveImageExt(options.centerConfig.outputFormat, '.jpg');
+    // 格式后缀解析：若 centerConfig 显式指定格式则优先应用（original 沿用源图扩展名）
+    let resolvedExt: string = formatExt;
+    if (options.centerConfig?.outputFormat) {
+        resolvedExt = resolveImageExt(options.centerConfig.outputFormat, ext || formatExt);
     }
 
     // 阶段 1：几何规格快速预检（零 I/O、零 Sharp，非法参数直接返回错误）
