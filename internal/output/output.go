@@ -43,6 +43,8 @@ func (op Op) DefaultSubfolder() string {
 		return "centered"
 	case Pad:
 		return "pad-aspect"
+	case Split:
+		return "split"
 	}
 	return "output"
 }

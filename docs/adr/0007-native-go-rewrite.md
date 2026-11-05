@@ -36,4 +36,5 @@
 - 2026-11-05：P1 工作台闭环完成 `cmd/smartimage` 的 Native 工作台：拖拽/选择文件与文件夹、4 格式快速转换、逐文件缩略图与体积变化、取消/重试/移除、输出策略记忆、`--quick <format>` 一键入口与「发送到」脚本。
 - 2026-11-05：P2 尺寸与边缘完成：新增 `internal/ops/resize`、`internal/ops/trim`、`internal/ops/crop`，共用 `internal/ops` 批量调度与 `internal/pipeline` 落盘；工作台按操作页独立保存参数与结果，队列行内预览目标尺寸。
 - 2026-11-05：P3 构图完成：新增 `internal/ops/center` 与 `internal/ops/padaspect`，共享 `ops.Fill` 填充色与 trim 的主体包围盒探测；「构图」页以标签切换两个模式，扩边预览目标画布。
-- 后续按 [`docs/product/rewrite-plan.md`](../product/rewrite-plan.md) 的 P4 推进；AI 抠图推迟到 P4 之后。
+- 2026-11-05：P4 切图完成：新增 `internal/ops/split`（纯几何 `Grid`/`EqualDivide` + 切片落盘）与工作台「切图」页的原生画布编辑器；切割线按原图像素保存，预览位图长边最多 2048 px；每片居中复用 `center.Recenter`。
+- 后续按 [`docs/product/rewrite-plan.md`](../product/rewrite-plan.md) 的 P5 推进 AI 抠图；P6 为分发。

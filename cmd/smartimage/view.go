@@ -37,6 +37,9 @@ func (a *app) sidebar(c *ui.Context) {
 			if components.SidebarItem(c, "构图", lucide.Frame(), a.page == pageFigure).Clicked() {
 				a.setPage(pageFigure)
 			}
+			if components.SidebarItem(c, "切图", lucide.SquareSplitVertical(), a.page == pageSplit).Clicked() {
+				a.setPage(pageSplit)
+			}
 		})
 		ui.Spacer(c)
 		components.SidebarSection(c, "应用", func() {
@@ -44,7 +47,7 @@ func (a *app) sidebar(c *ui.Context) {
 				a.setPage(pageSettings)
 			}
 		})
-		components.Text(c, "原生版 · P3").FontSize(11).TextColor(t.TextMuted).PaddingStart(t.Space(1))
+		components.Text(c, "原生版 · P4").FontSize(11).TextColor(t.TextMuted).PaddingStart(t.Space(1))
 	})
 }
 
@@ -64,6 +67,8 @@ func (a *app) titlebar(c *ui.Context) {
 		if a.fig == figPad {
 			title = "构图 · 画布扩边"
 		}
+	case pageSplit:
+		title = "切图 · 切割线编辑器"
 	case pageSettings:
 		title = "设置"
 	}
@@ -88,6 +93,8 @@ func (a *app) content(c *ui.Context) {
 			a.workPage(c, a.edgeToolbar)
 		case pageFigure:
 			a.workPage(c, a.figureToolbar)
+		case pageSplit:
+			a.splitPage(c)
 		default:
 			a.workPage(c, a.convertToolbar)
 		}
@@ -698,8 +705,8 @@ func (a *app) settingsPage(c *ui.Context) {
 			})
 
 			settingsCard(c, "关于", func() {
-				a.settingRow(c, "版本", "Go 原生重写 · P3", func() {
-					components.Text(c, "0.3.0").FontSize(12).TextColor(t.TextMuted)
+				a.settingRow(c, "版本", "Go 原生重写 · P4", func() {
+					components.Text(c, "0.4.0").FontSize(12).TextColor(t.TextMuted)
 				})
 				path, err := settings.Path()
 				if err == nil {

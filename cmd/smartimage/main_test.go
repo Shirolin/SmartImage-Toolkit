@@ -1,6 +1,7 @@
 package main
 
 import (
+	"image"
 	"image/png"
 	"os"
 	"testing"
@@ -49,6 +50,12 @@ func newTestApp(t *testing.T) *app {
 		padThreshold:    10,
 		padFill:         ops.FillAuto,
 		padFormat:       "original",
+		splitThreshold:  10,
+		splitSides:      center.All,
+		splitFill:       ops.FillAuto,
+		splitFormat:     "original",
+		splitRows:       2,
+		splitCols:       2,
 		index:           make(map[string]*fileItem),
 		summaries:       make(map[output.Op]string),
 		outputDirs:      make(map[output.Op]string),
@@ -182,6 +189,12 @@ func TestSidebarNavigatesBetweenPages(t *testing.T) {
 	if a.page != pageFigure {
 		t.Fatalf("page = %v, want figure", a.page)
 	}
+	if err := tt.Click("切图"); err != nil {
+		t.Fatalf("click split: %v", err)
+	}
+	if a.page != pageSplit {
+		t.Fatalf("page = %v, want split", a.page)
+	}
 	if err := tt.Click("设置"); err != nil {
 		t.Fatalf("click settings: %v", err)
 	}
@@ -252,6 +265,102 @@ func TestFigureCenterShowsControls(t *testing.T) {
 	}
 }
 
+// splitEditor builds the editor state for a 100×80 image shown at 2×.
+func splitEditor(f *fileItem) *splitState {
+	st := &splitState{
+		item:   f,
+		bitmap: ui.NewBitmap(image.NewNRGBA(image.Rect(0, 0, 100, 80))),
+		imgW:   100,
+		imgH:   80,
+		dispW:  100,
+		dispH:  80,
+	}
+	st.view = splitView{zoom: 1, panX: 10, panY: 10, displayW: 200, displayH: 160}
+	return st
+}
+
+func TestSplitPageShowsEditorAndTileCount(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageSplit
+	f := &fileItem{path: `D:\pics\photo.png`, name: "photo.png", size: 1000}
+	a.files = []*fileItem{f}
+	a.split = splitEditor(f)
+
+	tt := render(t, a)
+	for _, want := range []string{
+		"竖线", "横线", "平移", "吸附", "应用等分", "清空切割线", "每片居中",
+		"1 行 × 1 列 · 1 片", "开始切割 (1 片)",
+	} {
+		if !tt.HasText(want) {
+			t.Fatalf("split page is missing %q; texts = %v", want, tt.Texts())
+		}
+	}
+
+	if err := tt.Click("应用等分"); err != nil {
+		t.Fatalf("click equal divide: %v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("2 行 × 2 列 · 4 片") || !tt.HasText("开始切割 (4 片)") {
+		t.Fatalf("equal divide did not update the tile count; texts = %v", tt.Texts())
+	}
+}
+
+func TestSplitEditorAddsDragsAndRemovesLines(t *testing.T) {
+	st := splitEditor(&fileItem{path: `D:\pics\photo.png`, name: "photo.png"})
+
+	// A click at x=110 is image x=50.
+	if !st.addLine(110, 40, false) || len(st.cutX) != 1 || st.cutX[0] != 50 {
+		t.Fatalf("cutX = %v, want [50]", st.cutX)
+	}
+	if axis, idx, ok := st.hitLine(112, 40); !ok || axis != 1 || idx != 0 {
+		t.Fatalf("hitLine = %d/%d/%v, want the vertical line", axis, idx, ok)
+	}
+	if !st.dragLine(150, 40) || st.cutX[0] != 70 {
+		t.Fatalf("cutX after drag = %v, want [70]", st.cutX)
+	}
+
+	// Alt inverts the axis while the mode stays on vertical lines.
+	if !st.addLine(110, 70, true) || len(st.cutY) != 1 || st.cutY[0] != 30 {
+		t.Fatalf("cutY = %v, want [30]", st.cutY)
+	}
+
+	st.cutX = []int{30, 70}
+	st.dragIndex = 1
+	if !st.dragLine(410, 40) || st.cutX[1] != 99 {
+		t.Fatalf("cutX = %v, want the line clamped inside the image", st.cutX)
+	}
+
+	st.removeLine(1, 0)
+	if len(st.cutX) != 1 || st.cutX[0] != 99 {
+		t.Fatalf("cutX after remove = %v, want [99]", st.cutX)
+	}
+}
+
+func TestSplitSnapAlignsToOtherLines(t *testing.T) {
+	st := splitEditor(&fileItem{path: `D:\pics\photo.png`, name: "photo.png"})
+	st.snap = true
+	st.cutX = []int{30}
+
+	if got := st.snapValue(33, 1, -1); got != 30 {
+		t.Fatalf("snapValue(33) = %d, want 30", got)
+	}
+	if got := st.snapValue(40, 1, -1); got != 40 {
+		t.Fatalf("snapValue(40) = %d, want 40", got)
+	}
+}
+
+func TestSplitEditorLeavesWithTheQueue(t *testing.T) {
+	a := newTestApp(t)
+	f := &fileItem{path: `D:\pics\photo.png`, name: "photo.png", size: 1000}
+	a.files = []*fileItem{f}
+	a.split = splitEditor(f)
+
+	a.removeFile(f)
+	if a.split != nil {
+		t.Fatal("split editor kept an image that left the queue")
+	}
+}
+
 func TestParseLaunch(t *testing.T) {
 	l := parseLaunch([]string{"--quick", "webp", `D:\pics\a.png`, `D:\pics\b.jpg`})
 	if !l.hasQuick || l.quick != imageio.WebP {
@@ -310,6 +419,22 @@ func TestRenderPreview(t *testing.T) {
 			reason: "去除 上 12 · 下 12", width: 1920, height: 1056,
 		})
 		a.summaries[output.Trim] = "完成 1 个 · 节省 500 KB"
+	case "split":
+		a.page = pageSplit
+		f := &fileItem{path: `D:\pics\cover.png`, name: "cover.png", size: 2_400_000}
+		a.files = []*fileItem{f}
+		img, err := imageio.DecodeFile("../../.tmp/live/photo.png")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := img.Bounds()
+		w, h := b.Dx(), b.Dy()
+		f.width, f.height = w, h
+		a.split = &splitState{
+			item: f, bitmap: ui.NewBitmap(img),
+			imgW: w, imgH: h, dispW: w, dispH: h, snap: true,
+			cutX: []int{w / 3, w * 2 / 3}, cutY: []int{h / 2},
+		}
 	case "center", "pad":
 		a.page = pageFigure
 		if os.Getenv("SMARTIMAGE_PREVIEW_PAGE") == "pad" {

@@ -69,32 +69,10 @@ func Run(ctx context.Context, src string, cfg Config) ops.Result {
 
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
-	cuts := trim.Detect(img, cfg.Threshold)
-	contentW := w - cuts.Left - cuts.Right
-	contentH := h - cuts.Top - cuts.Bottom
-	if contentW <= 0 || contentH <= 0 {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: "容差计算结果为空或越界", InputSize: inputSize}
+	canvas, noteText, skip := Recenter(img, cfg.Threshold, cfg.Sides, cfg.Fill)
+	if canvas == nil {
+		return ops.Result{Status: ops.StatusSkipped, File: src, Reason: skip, InputSize: inputSize}
 	}
-	if cuts.Empty() {
-		return ops.Result{Status: ops.StatusSkipped, File: src, Reason: "画面没有可调整的留白", InputSize: inputSize}
-	}
-
-	left, top := cuts.Left, cuts.Top
-	if cfg.Sides == All || cfg.Sides == LeftRight {
-		left = (w - contentW) / 2
-	}
-	if cfg.Sides == All || cfg.Sides == TopBottom {
-		top = (h - contentH) / 2
-	}
-	if left == cuts.Left && top == cuts.Top {
-		return ops.Result{Status: ops.StatusSkipped, File: src, Reason: "主体已经居中，无需调整", InputSize: inputSize}
-	}
-
-	canvas := image.NewNRGBA(image.Rect(0, 0, w, h))
-	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: cfg.Fill.Color(img)}, image.Point{}, draw.Src)
-	srcRect := image.Rect(b.Min.X+cuts.Left, b.Min.Y+cuts.Top,
-		b.Min.X+cuts.Left+contentW, b.Min.Y+cuts.Top+contentH)
-	draw.Draw(canvas, image.Rect(left, top, left+contentW, top+contentH), img, srcRect.Min, draw.Over)
 
 	dir, base, outExt, err := cfg.Policy.Target(src, format.Ext(), output.Center)
 	if err != nil {
@@ -109,9 +87,42 @@ func Run(ctx context.Context, src string, cfg Config) ops.Result {
 	}
 	return ops.Result{
 		Status: ops.StatusSuccess, File: src, Output: out,
-		Reason: note(cuts, left, w-left-contentW, top, h-top-contentH, cfg.Sides), InputSize: inputSize, OutputSize: outSize,
+		Reason: noteText, InputSize: inputSize, OutputSize: outSize,
 		Width: w, Height: h,
 	}
+}
+
+// Recenter returns a canvas of the image's size with its subject centered on
+// the chosen axes, plus the resulting margins. It returns a nil canvas and
+// the reason when nothing would move, which is also how the split operation
+// decides to keep a tile unchanged.
+func Recenter(img image.Image, threshold int, sides Sides, fill ops.Fill) (canvas *image.NRGBA, noteText, skip string) {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	cuts := trim.Detect(img, threshold)
+	contentW := w - cuts.Left - cuts.Right
+	contentH := h - cuts.Top - cuts.Bottom
+	if cuts.Empty() {
+		return nil, "", "画面没有可调整的留白"
+	}
+
+	left, top := cuts.Left, cuts.Top
+	if sides == All || sides == LeftRight {
+		left = (w - contentW) / 2
+	}
+	if sides == All || sides == TopBottom {
+		top = (h - contentH) / 2
+	}
+	if left == cuts.Left && top == cuts.Top {
+		return nil, "", "主体已经居中，无需调整"
+	}
+
+	canvas = image.NewNRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: fill.Color(img)}, image.Point{}, draw.Src)
+	srcRect := image.Rect(b.Min.X+cuts.Left, b.Min.Y+cuts.Top,
+		b.Min.X+cuts.Left+contentW, b.Min.Y+cuts.Top+contentH)
+	draw.Draw(canvas, image.Rect(left, top, left+contentW, top+contentH), img, srcRect.Min, draw.Over)
+	return canvas, note(cuts, left, w-left-contentW, top, h-top-contentH, sides), ""
 }
 
 // note describes the resulting margins for the axes that moved.

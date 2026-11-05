@@ -22,6 +22,7 @@ import (
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/crop"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/padaspect"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/resize"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/split"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/transcode"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/trim"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/output"
@@ -136,6 +137,7 @@ func (a *app) clearFiles() {
 	a.summaries = make(map[output.Op]string)
 	a.outputDirs = make(map[output.Op]string)
 	a.notice = ""
+	a.releaseSplit()
 }
 
 // removeFile drops one queued entry. Files are only removable while idle so a
@@ -157,6 +159,7 @@ func (a *app) removeFile(f *fileItem) {
 			a.summaries = make(map[output.Op]string)
 			a.outputDirs = make(map[output.Op]string)
 		}
+		a.syncSplit()
 		return
 	}
 }
@@ -397,6 +400,8 @@ func (a *app) startCurrent() {
 		a.startCenter()
 	case output.Pad:
 		a.startPad()
+	case output.Split:
+		a.startSplit()
 	default:
 		a.startConvert()
 	}
@@ -450,6 +455,68 @@ func (a *app) startPad() {
 	a.startRun(output.Pad, func(ctx context.Context, src string) ops.Result {
 		return padaspect.Run(ctx, src, cfg)
 	})
+}
+
+// splitConfig snapshots the editor parameters for the single image on the
+// split page.
+func (a *app) splitConfig(grid split.Grid) split.Config {
+	return split.Config{
+		Grid:      grid,
+		Center:    a.splitCenter,
+		Threshold: int(math.Round(a.splitThreshold)),
+		Sides:     a.splitSides,
+		Fill:      a.splitFill,
+		Format:    a.splitFormat,
+		Policy:    a.policy(),
+	}
+}
+
+// startSplit cuts the image currently open in the editor. The split page is
+// single-image by design, so it bypasses the queue-wide startRun.
+func (a *app) startSplit() {
+	if a.busy || a.split == nil || a.split.item == nil {
+		return
+	}
+	grid, err := a.splitGrid()
+	if err != nil {
+		a.notice = err.Error()
+		return
+	}
+	if a.settings.Location == settings.CustomDir && strings.TrimSpace(a.settings.CustomDir) == "" {
+		a.notice = "请先选择输出目录。"
+		a.chooseOutputDir(nil)
+		return
+	}
+	item := a.split.item
+	cfg := a.splitConfig(grid)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+	a.busy = true
+	a.notice = ""
+	a.done, a.total = 0, 1
+	delete(a.summaries, output.Split)
+	delete(a.outputDirs, output.Split)
+	item.setResult(output.Split, opResult{status: statusRunning})
+
+	go func() {
+		r := split.Run(ctx, item.path, cfg)
+		a.update(func() {
+			applyResult(item, output.Split, r)
+			a.busy = false
+			a.cancel = nil
+			a.done = 1
+			a.summarize(output.Split, []*fileItem{item})
+			// The split result is a folder of tiles; "open output" should land
+			// in that folder, not in the directory that holds it.
+			if r.Output != "" {
+				a.outputDirs[output.Split] = r.Output
+			}
+			if r.Status == ops.StatusCanceled {
+				a.summaries[output.Split] = "已取消切割。"
+			}
+		})
+	}()
 }
 
 func (a *app) startRun(op output.Op, job ops.Job) {
