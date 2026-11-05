@@ -7,3 +7,6 @@ bin/
 .DS_Store
 .agent/
 .vfox/
+
+# Go rewrite scratch
+.tmp/

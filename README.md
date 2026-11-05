@@ -59,6 +59,32 @@ npm install
 
 卸载请执行 `scripts/uninstall.ps1`。
 
+## 🦫 原生 Go 重写（进行中）
+
+桌面端正在按功能切片重写为 Go 原生应用（MyGo + Onevra），要求 Go **1.27.3+**。Node 实现仍是当前稳定版本，直到各切片验收完成。
+
+```bash
+go run ./cmd/smartimage                              # 原生桌面 UI
+go run ./cmd/smartimage --quick webp <路径...>        # 打开并立即转 WebP
+go run ./cmd/smartimage <路径...>                     # 打开并导入文件/文件夹
+go run ./cmd/smartimage-cli -format webp <路径...>   # 命令行转换（含目录递归）
+go test ./...                                        # Go 质量门禁
+```
+
+构建并安装「发送到」快捷方式（当前用户，无需管理员）：
+
+```powershell
+go build -trimpath -ldflags "-s -w" -o bin/smartimage.exe ./cmd/smartimage
+pwsh -File scripts/install-sendto.ps1
+# 移除：pwsh -File scripts/install-sendto.ps1 -Uninstall
+```
+
+生成两个入口：「转成 WebP (SmartImage)」直接转换选中的图片；「SmartImage 图片工具」打开工作台并导入选中的图片。
+
+P1 已完成：工作台、文件队列与缩略图、4 格式快速转换、体积变化、取消/重试、输出策略记忆、发送到入口。
+
+P2 已完成：缩放（按宽/高/百分比/自定义，支持 cover/contain/fill/inside）、智能去边（容差 + 修剪方向）、手动裁剪（四边像素）；三者与转换共用队列、进度与取消，运行前在队列行内预览目标尺寸。后续切片见 [`docs/product/rewrite-plan.md`](docs/product/rewrite-plan.md)，架构决策见 [`docs/adr/0007-native-go-rewrite.md`](docs/adr/0007-native-go-rewrite.md)。
+
 ## 🛠️ 开发
 
 | 命令                 | 说明                                     |
