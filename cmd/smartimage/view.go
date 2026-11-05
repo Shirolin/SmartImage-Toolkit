@@ -11,6 +11,9 @@ import (
 	"github.com/oneo-me/onevra/source/shells/sidebar"
 
 	"github.com/Shirolin/SmartImage-Toolkit/internal/imageio"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/center"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/padaspect"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/resize"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/trim"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/output"
@@ -31,6 +34,9 @@ func (a *app) sidebar(c *ui.Context) {
 			if components.SidebarItem(c, "边缘处理", lucide.Scissors(), a.page == pageEdge).Clicked() {
 				a.setPage(pageEdge)
 			}
+			if components.SidebarItem(c, "构图", lucide.Frame(), a.page == pageFigure).Clicked() {
+				a.setPage(pageFigure)
+			}
 		})
 		ui.Spacer(c)
 		components.SidebarSection(c, "应用", func() {
@@ -38,7 +44,7 @@ func (a *app) sidebar(c *ui.Context) {
 				a.setPage(pageSettings)
 			}
 		})
-		components.Text(c, "原生版 · P2").FontSize(11).TextColor(t.TextMuted).PaddingStart(t.Space(1))
+		components.Text(c, "原生版 · P3").FontSize(11).TextColor(t.TextMuted).PaddingStart(t.Space(1))
 	})
 }
 
@@ -52,6 +58,11 @@ func (a *app) titlebar(c *ui.Context) {
 		title = "边缘处理 · 智能去边"
 		if a.edge == edgeCrop {
 			title = "边缘处理 · 手动裁剪"
+		}
+	case pageFigure:
+		title = "构图 · 智能居中"
+		if a.fig == figPad {
+			title = "构图 · 画布扩边"
 		}
 	case pageSettings:
 		title = "设置"
@@ -75,6 +86,8 @@ func (a *app) content(c *ui.Context) {
 			a.workPage(c, a.resizeToolbar)
 		case pageEdge:
 			a.workPage(c, a.edgeToolbar)
+		case pageFigure:
+			a.workPage(c, a.figureToolbar)
 		default:
 			a.workPage(c, a.convertToolbar)
 		}
@@ -86,6 +99,7 @@ func (a *app) workPage(c *ui.Context, toolbar func(*ui.Context)) {
 	ui.Column(c).Fill().Gap(t.Space(3)).Children(func() {
 		a.noticeBanner(c)
 		a.edgeTabs(c)
+		a.figureTabs(c)
 		toolbar(c)
 		if len(a.files) == 0 {
 			a.emptyState(c)
@@ -119,6 +133,17 @@ func (a *app) edgeTabs(c *ui.Context) {
 	tabs := components.Tabs(c, &selected, components.TabsSegmented, "智能去边", "手动裁剪")
 	if tabs.List.Changed() {
 		a.setEdgeMode(edgeMode(selected))
+	}
+}
+
+func (a *app) figureTabs(c *ui.Context) {
+	if a.page != pageFigure {
+		return
+	}
+	selected := int(a.fig)
+	tabs := components.Tabs(c, &selected, components.TabsSegmented, "智能居中", "画布扩边")
+	if tabs.List.Changed() {
+		a.setFigureMode(figMode(selected))
 	}
 }
 
@@ -232,6 +257,89 @@ func (a *app) edgeToolbar(c *ui.Context) {
 		if a.edge == edgeCrop {
 			formatOp = output.Crop
 			formatValue = &a.cropFormat
+		}
+		a.outputRows(c, func() {
+			a.opFormatSelect(c, formatValue, formatOp, 140)
+		})
+	})
+}
+
+func (a *app) figureToolbar(c *ui.Context) {
+	t := c.Theme()
+	panel(c, func() {
+		if a.fig == figPad {
+			ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+				components.Text(c, "比例").FontSize(12).TextColor(t.TextMuted)
+				if selectControl(c, &a.padPreset, 104, padPresetLabel,
+					[]padPreset{pad16x9, pad9x16, pad1x1, pad4x5, padCustom}, a.busy) {
+					a.resetOp(output.Pad)
+				}
+				if a.padPreset == padCustom {
+					if numberField(c, &a.padAspectW, 1, 1000, 1, 72, "比例宽") {
+						a.resetOp(output.Pad)
+					}
+					components.Text(c, ":").FontSize(12).TextColor(t.TextMuted)
+					if numberField(c, &a.padAspectH, 1, 1000, 1, 72, "比例高") {
+						a.resetOp(output.Pad)
+					}
+				}
+				components.Text(c, "长边").FontSize(12).TextColor(t.TextMuted)
+				if numberField(c, &a.padLongEdge, 1, padaspect.MaxDim, 10, 92, "画布长边像素") {
+					a.resetOp(output.Pad)
+				}
+				components.Text(c, "主体占比").FontSize(12).TextColor(t.TextMuted)
+				if numberField(c, &a.padRatio, 40, 80, 5, 72, "主体占画布高度的百分比") {
+					a.resetOp(output.Pad)
+				}
+				components.Text(c, "%").FontSize(12).TextColor(t.TextMuted)
+				ui.Spacer(c)
+			})
+			ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+				components.Text(c, "主体").FontSize(12).TextColor(t.TextMuted)
+				if selectControl(c, &a.padSubject, 112, subjectLabel,
+					[]padaspect.SubjectMode{padaspect.Full, padaspect.Trim}, a.busy) {
+					a.resetOp(output.Pad)
+				}
+				if a.padSubject == padaspect.Trim {
+					components.Text(c, "容差").FontSize(12).TextColor(t.TextMuted)
+					if numberField(c, &a.padThreshold, 1, 100, 1, 90, "色差容忍度") {
+						a.resetOp(output.Pad)
+					}
+				}
+				components.Text(c, "填充").FontSize(12).TextColor(t.TextMuted)
+				if selectControl(c, &a.padFill, 104, fillLabel,
+					[]ops.Fill{ops.FillAuto, ops.FillTransparent, ops.FillWhite, ops.FillBlack}, a.busy) {
+					a.resetOp(output.Pad)
+				}
+				if err := a.padError(); err != nil {
+					components.Text(c, err.Error()).FontSize(11).TextColor(t.Warning).SingleLine()
+				}
+				ui.Spacer(c)
+			})
+		} else {
+			ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+				components.Text(c, "容差").FontSize(12).TextColor(t.TextMuted)
+				if numberField(c, &a.centerThreshold, 1, 100, 1, 90, "色差容忍度") {
+					a.resetOp(output.Center)
+				}
+				components.Text(c, "参与边").FontSize(12).TextColor(t.TextMuted)
+				if selectControl(c, &a.centerSides, 104, centerSidesLabel,
+					[]center.Sides{center.All, center.TopBottom, center.LeftRight}, a.busy) {
+					a.resetOp(output.Center)
+				}
+				components.Text(c, "填充").FontSize(12).TextColor(t.TextMuted)
+				if selectControl(c, &a.centerFill, 104, fillLabel,
+					[]ops.Fill{ops.FillAuto, ops.FillTransparent, ops.FillWhite, ops.FillBlack}, a.busy) {
+					a.resetOp(output.Center)
+				}
+				ui.Spacer(c)
+			})
+		}
+		formatOp := output.Center
+		formatValue := &a.centerFormat
+		if a.fig == figPad {
+			formatOp = output.Pad
+			formatValue = &a.padFormat
 		}
 		a.outputRows(c, func() {
 			a.opFormatSelect(c, formatValue, formatOp, 140)
@@ -489,7 +597,9 @@ func (a *app) actionBar(c *ui.Context, op output.Op) {
 					a.cancelRun()
 				}
 			} else {
-				disabled := len(a.convertible(op)) == 0 || (op == output.Crop && a.cropEmpty())
+				disabled := len(a.convertible(op)) == 0 ||
+					(op == output.Crop && a.cropEmpty()) ||
+					(op == output.Pad && a.padError() != nil)
 				primary := components.Button(c, a.startLabel(op), components.ButtonPrimary).Disabled(disabled)
 				if primary.Clicked() {
 					a.startCurrent()
@@ -519,6 +629,10 @@ func opVerb(op output.Op) string {
 		return "开始去边"
 	case output.Crop:
 		return "开始裁剪"
+	case output.Center:
+		return "开始居中"
+	case output.Pad:
+		return "开始扩边"
 	default:
 		return "开始转换"
 	}
@@ -532,6 +646,10 @@ func (a *app) operationHint(op output.Op) string {
 		return "自动识别边缘纯色或透明区域并切除。"
 	case output.Crop:
 		return "按上/下/左/右像素批量裁剪。"
+	case output.Center:
+		return "识别主体后重新分配四周留白，画布尺寸不变。"
+	case output.Pad:
+		return "按目标比例新建画布，主体等比缩小后居中。"
 	default:
 		return "选择目标格式后批量转换。"
 	}
@@ -551,7 +669,7 @@ func (a *app) settingsPage(c *ui.Context) {
 					a.locationSelect(c, 178)
 				})
 				if a.settings.Location == settings.Subfolder {
-					a.settingRow(c, "子文件夹名称", "留空则使用 converted / resized / trimmed / cropped", func() {
+					a.settingRow(c, "子文件夹名称", "留空则使用各操作的默认名称", func() {
 						if components.TextBox(c, &a.settings.Subfolder, components.TextBoxOptions{}).
 							Width(178).Label("子文件夹名称").Placeholder("留空自动命名").
 							Disabled(a.busy).Changed() {
@@ -580,8 +698,8 @@ func (a *app) settingsPage(c *ui.Context) {
 			})
 
 			settingsCard(c, "关于", func() {
-				a.settingRow(c, "版本", "Go 原生重写 · P2", func() {
-					components.Text(c, "0.2.0").FontSize(12).TextColor(t.TextMuted)
+				a.settingRow(c, "版本", "Go 原生重写 · P3", func() {
+					components.Text(c, "0.3.0").FontSize(12).TextColor(t.TextMuted)
 				})
 				path, err := settings.Path()
 				if err == nil {
@@ -699,6 +817,44 @@ func sidesLabel(s trim.Sides) string {
 	default:
 		return "全向"
 	}
+}
+
+func centerSidesLabel(s center.Sides) string {
+	switch s {
+	case center.TopBottom:
+		return "仅上下"
+	case center.LeftRight:
+		return "仅左右"
+	default:
+		return "四周"
+	}
+}
+
+func fillLabel(f ops.Fill) string {
+	switch f {
+	case ops.FillTransparent:
+		return "透明"
+	case ops.FillWhite:
+		return "白色"
+	case ops.FillBlack:
+		return "黑色"
+	default:
+		return "背景色"
+	}
+}
+
+func padPresetLabel(p padPreset) string {
+	if p == padCustom {
+		return "自定义"
+	}
+	return string(p)
+}
+
+func subjectLabel(m padaspect.SubjectMode) string {
+	if m == padaspect.Trim {
+		return "去边探测"
+	}
+	return "整图"
 }
 
 func locationLabel(l settings.Location) string {

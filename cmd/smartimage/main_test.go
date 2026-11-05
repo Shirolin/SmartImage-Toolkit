@@ -9,6 +9,9 @@ import (
 	"github.com/oneo-me/onevra/source/theme"
 
 	"github.com/Shirolin/SmartImage-Toolkit/internal/imageio"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/center"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/padaspect"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/resize"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/trim"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/output"
@@ -19,22 +22,36 @@ func newTestApp(t *testing.T) *app {
 	t.Helper()
 	t.Setenv("APPDATA", t.TempDir())
 	a := &app{
-		page:          pageConvert,
-		settings:      settings.Default(),
-		format:        imageio.WebP,
-		resizeMode:    resize.ByWidth,
-		resizeWidth:   1920,
-		resizeHeight:  1080,
-		resizePercent: 50,
-		resizeFit:     resize.Cover,
-		resizeFormat:  "original",
-		trimThreshold: 10,
-		trimSides:     trim.All,
-		trimFormat:    "original",
-		cropFormat:    "original",
-		index:         make(map[string]*fileItem),
-		summaries:     make(map[output.Op]string),
-		outputDirs:    make(map[output.Op]string),
+		page:            pageConvert,
+		settings:        settings.Default(),
+		format:          imageio.WebP,
+		resizeMode:      resize.ByWidth,
+		resizeWidth:     1920,
+		resizeHeight:    1080,
+		resizePercent:   50,
+		resizeFit:       resize.Cover,
+		resizeFormat:    "original",
+		trimThreshold:   10,
+		trimSides:       trim.All,
+		trimFormat:      "original",
+		cropFormat:      "original",
+		fig:             figCenter,
+		centerThreshold: 10,
+		centerSides:     center.All,
+		centerFill:      ops.FillAuto,
+		centerFormat:    "original",
+		padPreset:       pad16x9,
+		padAspectW:      4,
+		padAspectH:      5,
+		padLongEdge:     1920,
+		padRatio:        60,
+		padSubject:      padaspect.Full,
+		padThreshold:    10,
+		padFill:         ops.FillAuto,
+		padFormat:       "original",
+		index:           make(map[string]*fileItem),
+		summaries:       make(map[output.Op]string),
+		outputDirs:      make(map[output.Op]string),
 	}
 	a.list.Key = func(i int) any {
 		if i < 0 || i >= len(a.files) {
@@ -159,6 +176,12 @@ func TestSidebarNavigatesBetweenPages(t *testing.T) {
 	if a.page != pageEdge {
 		t.Fatalf("page = %v, want edge", a.page)
 	}
+	if err := tt.Click("构图"); err != nil {
+		t.Fatalf("click figure: %v", err)
+	}
+	if a.page != pageFigure {
+		t.Fatalf("page = %v, want figure", a.page)
+	}
 	if err := tt.Click("设置"); err != nil {
 		t.Fatalf("click settings: %v", err)
 	}
@@ -198,6 +221,33 @@ func TestResizePagePreviewsOutputSize(t *testing.T) {
 	for _, want := range []string{"模式", "宽度", "输出格式", "1920×1080 → 960×540", "开始缩放 (1)"} {
 		if !tt.HasText(want) {
 			t.Fatalf("resize page is missing %q; texts = %v", want, tt.Texts())
+		}
+	}
+}
+
+func TestFigurePadPreviewsCanvas(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageFigure
+	a.fig = figPad
+	a.files = []*fileItem{{path: `D:\pics\photo.png`, name: "photo.png", size: 1000, width: 4000, height: 3000}}
+
+	tt := render(t, a)
+	for _, want := range []string{"比例", "长边", "主体占比", "主体", "填充", "4000×3000 → 1920×1080", "开始扩边 (1)"} {
+		if !tt.HasText(want) {
+			t.Fatalf("pad page is missing %q; texts = %v", want, tt.Texts())
+		}
+	}
+}
+
+func TestFigureCenterShowsControls(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageFigure
+	a.files = []*fileItem{{path: `D:\pics\photo.png`, name: "photo.png", size: 1000, width: 100, height: 80}}
+
+	tt := render(t, a)
+	for _, want := range []string{"智能居中", "画布扩边", "容差", "参与边", "开始居中 (1)"} {
+		if !tt.HasText(want) {
+			t.Fatalf("center page is missing %q; texts = %v", want, tt.Texts())
 		}
 	}
 }
@@ -260,6 +310,24 @@ func TestRenderPreview(t *testing.T) {
 			reason: "去除 上 12 · 下 12", width: 1920, height: 1056,
 		})
 		a.summaries[output.Trim] = "完成 1 个 · 节省 500 KB"
+	case "center", "pad":
+		a.page = pageFigure
+		if os.Getenv("SMARTIMAGE_PREVIEW_PAGE") == "pad" {
+			a.fig = figPad
+		}
+		a.files = []*fileItem{{
+			path: `D:\pics\cover.png`, name: "cover.png", size: 2_400_000,
+			width: 1920, height: 1080,
+		}}
+		op, reason, w, h := output.Center, "左右各 40 · 上下各 20", 1920, 1080
+		if a.fig == figPad {
+			op, reason, w, h = output.Pad, "16:9 画布 · 主体 60%", 1920, 1080
+		}
+		a.files[0].setResult(op, opResult{
+			status: statusSuccess, output: `D:\pics\cover_centered.png`, outputSize: 2_000_000,
+			reason: reason, width: w, height: h,
+		})
+		a.summaries[op] = "完成 1 个 · 节省 400 KB"
 	default:
 		a.files = []*fileItem{
 			{

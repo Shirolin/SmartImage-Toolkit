@@ -18,7 +18,9 @@ import (
 	"github.com/Shirolin/SmartImage-Toolkit/internal/discovery"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/imageio"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/center"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/crop"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/padaspect"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/resize"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/transcode"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/trim"
@@ -336,6 +338,53 @@ func (a *app) cropEmpty() bool {
 	return c.Top == 0 && c.Bottom == 0 && c.Left == 0 && c.Right == 0
 }
 
+func (a *app) centerConfig() center.Config {
+	return center.Config{
+		Threshold: int(math.Round(a.centerThreshold)),
+		Sides:     a.centerSides,
+		Fill:      a.centerFill,
+		Format:    a.centerFormat,
+		Policy:    a.policy(),
+	}
+}
+
+// aspect returns the pad page's target ratio, using the custom fields when
+// the preset is "custom".
+func (a *app) aspect() (w, h int) {
+	switch a.padPreset {
+	case pad9x16:
+		return 9, 16
+	case pad1x1:
+		return 1, 1
+	case pad4x5:
+		return 4, 5
+	case padCustom:
+		return int(math.Round(a.padAspectW)), int(math.Round(a.padAspectH))
+	default:
+		return 16, 9
+	}
+}
+
+func (a *app) padConfig() padaspect.Config {
+	w, h := a.aspect()
+	return padaspect.Config{
+		AspectW:      w,
+		AspectH:      h,
+		LongEdge:     int(math.Round(a.padLongEdge)),
+		SubjectRatio: int(math.Round(a.padRatio)),
+		Subject:      a.padSubject,
+		Threshold:    int(math.Round(a.padThreshold)),
+		Fill:         a.padFill,
+		Format:       a.padFormat,
+		Policy:       a.policy(),
+	}
+}
+
+func (a *app) padError() error {
+	_, _, err := padaspect.CanvasSize(a.padConfig())
+	return err
+}
+
 func (a *app) startCurrent() {
 	switch a.currentOp() {
 	case output.Resize:
@@ -344,6 +393,10 @@ func (a *app) startCurrent() {
 		a.startTrim()
 	case output.Crop:
 		a.startCrop()
+	case output.Center:
+		a.startCenter()
+	case output.Pad:
+		a.startPad()
 	default:
 		a.startConvert()
 	}
@@ -378,6 +431,24 @@ func (a *app) startCrop() {
 	cfg := a.cropConfig()
 	a.startRun(output.Crop, func(ctx context.Context, src string) ops.Result {
 		return crop.Run(ctx, src, cfg)
+	})
+}
+
+func (a *app) startCenter() {
+	cfg := a.centerConfig()
+	a.startRun(output.Center, func(ctx context.Context, src string) ops.Result {
+		return center.Run(ctx, src, cfg)
+	})
+}
+
+func (a *app) startPad() {
+	if err := a.padError(); err != nil {
+		a.notice = err.Error()
+		return
+	}
+	cfg := a.padConfig()
+	a.startRun(output.Pad, func(ctx context.Context, src string) ops.Result {
+		return padaspect.Run(ctx, src, cfg)
 	})
 }
 
@@ -538,6 +609,9 @@ func (a *app) previewDims(f *fileItem, op output.Op) (w, h int, ok bool) {
 		w = f.width - c.Left - c.Right
 		h = f.height - c.Top - c.Bottom
 		return w, h, w > 0 && h > 0
+	case output.Pad:
+		w, h, err := padaspect.CanvasSize(a.padConfig())
+		return w, h, err == nil
 	}
 	return 0, 0, false
 }

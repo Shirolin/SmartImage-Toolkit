@@ -16,6 +16,9 @@ import (
 	"github.com/oneo-me/onevra/source/theme"
 
 	"github.com/Shirolin/SmartImage-Toolkit/internal/imageio"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/center"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/padaspect"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/resize"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/trim"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/output"
@@ -28,6 +31,7 @@ const (
 	pageConvert page = iota
 	pageResize
 	pageEdge
+	pageFigure
 	pageSettings
 )
 
@@ -36,6 +40,25 @@ type edgeMode int
 const (
 	edgeTrim edgeMode = iota
 	edgeCrop
+)
+
+type figMode int
+
+const (
+	figCenter figMode = iota
+	figPad
+)
+
+// padPreset is the aspect choice on the pad page; padCustom reveals the two
+// number fields.
+type padPreset string
+
+const (
+	pad16x9   padPreset = "16:9"
+	pad9x16   padPreset = "9:16"
+	pad1x1    padPreset = "1:1"
+	pad4x5    padPreset = "4:5"
+	padCustom padPreset = "custom"
 )
 
 type status int
@@ -117,6 +140,23 @@ type app struct {
 	cropRight  float64
 	cropFormat string
 
+	fig figMode
+
+	centerThreshold float64
+	centerSides     center.Sides
+	centerFill      ops.Fill
+	centerFormat    string
+
+	padPreset    padPreset
+	padAspectW   float64
+	padAspectH   float64
+	padLongEdge  float64
+	padRatio     float64
+	padSubject   padaspect.SubjectMode
+	padThreshold float64
+	padFill      ops.Fill
+	padFormat    string
+
 	files []*fileItem
 	index map[string]*fileItem
 	list  components.ListState
@@ -148,23 +188,37 @@ func main() {
 	}
 
 	a := &app{
-		page:          pageConvert,
-		settings:      prefs,
-		format:        format,
-		resizeMode:    resize.ByWidth,
-		resizeWidth:   1920,
-		resizeHeight:  1080,
-		resizePercent: 50,
-		resizeFit:     resize.Cover,
-		resizeFormat:  "original",
-		trimThreshold: 10,
-		trimSides:     trim.All,
-		trimFormat:    "original",
-		cropFormat:    "original",
-		index:         make(map[string]*fileItem),
-		summaries:     make(map[output.Op]string),
-		outputDirs:    make(map[output.Op]string),
-		thumbSem:      make(chan struct{}, 2),
+		page:            pageConvert,
+		settings:        prefs,
+		format:          format,
+		resizeMode:      resize.ByWidth,
+		resizeWidth:     1920,
+		resizeHeight:    1080,
+		resizePercent:   50,
+		resizeFit:       resize.Cover,
+		resizeFormat:    "original",
+		trimThreshold:   10,
+		trimSides:       trim.All,
+		trimFormat:      "original",
+		cropFormat:      "original",
+		fig:             figCenter,
+		centerThreshold: 10,
+		centerSides:     center.All,
+		centerFill:      ops.FillAuto,
+		centerFormat:    "original",
+		padPreset:       pad16x9,
+		padAspectW:      4,
+		padAspectH:      5,
+		padLongEdge:     1920,
+		padRatio:        60,
+		padSubject:      padaspect.Full,
+		padThreshold:    10,
+		padFill:         ops.FillAuto,
+		padFormat:       "original",
+		index:           make(map[string]*fileItem),
+		summaries:       make(map[output.Op]string),
+		outputDirs:      make(map[output.Op]string),
+		thumbSem:        make(chan struct{}, 2),
 	}
 	a.list.Key = func(i int) any {
 		if i < 0 || i >= len(a.files) {
@@ -290,6 +344,13 @@ func (a *app) setEdgeMode(m edgeMode) {
 	}
 }
 
+func (a *app) setFigureMode(m figMode) {
+	a.fig = m
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+}
+
 func (a *app) currentOp() output.Op {
 	switch a.page {
 	case pageResize:
@@ -299,6 +360,11 @@ func (a *app) currentOp() output.Op {
 			return output.Crop
 		}
 		return output.Trim
+	case pageFigure:
+		if a.fig == figPad {
+			return output.Pad
+		}
+		return output.Center
 	default:
 		return output.Convert
 	}

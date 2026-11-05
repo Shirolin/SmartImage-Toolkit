@@ -83,7 +83,9 @@ pwsh -File scripts/install-sendto.ps1
 
 P1 已完成：工作台、文件队列与缩略图、4 格式快速转换、体积变化、取消/重试、输出策略记忆、发送到入口。
 
-P2 已完成：缩放（按宽/高/百分比/自定义，支持 cover/contain/fill/inside）、智能去边（容差 + 修剪方向）、手动裁剪（四边像素）；三者与转换共用队列、进度与取消，运行前在队列行内预览目标尺寸。后续切片见 [`docs/product/rewrite-plan.md`](docs/product/rewrite-plan.md)，架构决策见 [`docs/adr/0007-native-go-rewrite.md`](docs/adr/0007-native-go-rewrite.md)。
+P2 已完成：缩放（按宽/高/百分比/自定义，支持 cover/contain/fill/inside）、智能去边（容差 + 修剪方向）、手动裁剪（四边像素）；三者与转换共用队列、进度与取消，运行前在队列行内预览目标尺寸。
+
+P3 已完成：智能居中（容差 + 参与边 + 填充色，画布尺寸不变）、画布扩边（16:9 / 9:16 / 1:1 / 4:5 / 自定义比例，长边、主体占比与填充色可调，预览目标画布）。后续切片见 [`docs/product/rewrite-plan.md`](docs/product/rewrite-plan.md)，架构决策见 [`docs/adr/0007-native-go-rewrite.md`](docs/adr/0007-native-go-rewrite.md)。
 
 ## 🛠️ 开发
 
