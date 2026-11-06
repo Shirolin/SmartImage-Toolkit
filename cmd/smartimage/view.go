@@ -50,7 +50,7 @@ func (a *app) sidebar(c *ui.Context) {
 				a.setPage(pageSettings)
 			}
 		})
-		components.Text(c, "原生版 · P5").FontSize(11).TextColor(t.TextMuted).PaddingStart(t.Space(1))
+		components.Text(c, "原生版 · P6").FontSize(11).TextColor(t.TextMuted).PaddingStart(t.Space(1))
 	})
 }
 
@@ -755,8 +755,8 @@ func (a *app) settingsPage(c *ui.Context) {
 			})
 
 			settingsCard(c, "关于", func() {
-				a.settingRow(c, "版本", "Go 原生重写 · P5", func() {
-					components.Text(c, "0.5.0").FontSize(12).TextColor(t.TextMuted)
+				a.settingRow(c, "版本", "Go 原生重写 · P6", func() {
+					components.Text(c, appVersion()).FontSize(12).TextColor(t.TextMuted)
 				})
 				path, err := settings.Path()
 				if err == nil {

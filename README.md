@@ -81,6 +81,15 @@ pwsh -File scripts/install-sendto.ps1
 # 移除：pwsh -File scripts/install-sendto.ps1 -Uninstall
 ```
 
+制作安装包（worker、模型与 VC++ 运行库随包，约 195 MB）：
+
+```powershell
+pwsh -File scripts/package.ps1
+# 产物：dist\windows-amd64\smartimage-setup-0.6.0-amd64.exe
+```
+
+安装包按用户安装到 `%LOCALAPPDATA%\Programs\SmartImage`，无需管理员；在「设置 → 应用」卸载，用户设置保留在 `%APPDATA%\SmartImage`。安装器注册图片「打开方式」与两项右键菜单（「用 SmartImage 打开」「转成 WebP」）；未签名，首次运行会有 SmartScreen 提示。
+
 抠图需要 `matting-worker.exe` 与 `models/` 与主程序放在同一目录（开发时 `models/` 在仓库根目录亦可）。未安装时其他功能照常使用，「抠图」页会给出缺少文件的提示。
 
 生成两个入口：「转成 WebP (SmartImage)」直接转换选中的图片；「SmartImage 图片工具」打开工作台并导入选中的图片。
@@ -94,6 +103,8 @@ P3 已完成：智能居中（容差 + 参与边 + 填充色，画布尺寸不�
 P4 已完成：原生切图编辑器——竖线/横线/平移模式，点击加线、Alt 反向、拖动移动、双击删除、吸附、滚轮缩放与平移，等分行列，最多 500 片实时计数，每片可选智能居中；导出为原图命名的新文件夹（`_rNN_cNN`）。
 
 P5 已完成：本地 AI 抠图——独立 Rust worker + ONNX Runtime + U2-Net（快速/精细两档），完全离线；边缘羽化只作用于 alpha，透明通道保留，JPEG 自动回落 PNG；统一队列、进度、取消与输出规则（`_nobg`）。worker 与模型许可、分发方式见 [`docs/adr/0008-matting-worker.md`](docs/adr/0008-matting-worker.md)。架构决策见 [`docs/adr/0007-native-go-rewrite.md`](docs/adr/0007-native-go-rewrite.md)。
+
+P6 已完成：Windows 安装包——`go tool mygo build` 生成按用户安装的 NSIS 安装器，自带 worker、模型与 VC++ 运行库；注册开始菜单、卸载项、图片「打开方式」与右键菜单（「用 SmartImage 打开」「转成 WebP」），卸载保留用户设置。分发决策见 [`docs/adr/0009-windows-distribution.md`](docs/adr/0009-windows-distribution.md)。
 
 ## 🛠️ 开发
 

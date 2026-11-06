@@ -25,6 +25,18 @@ import (
 	"github.com/Shirolin/SmartImage-Toolkit/internal/settings"
 )
 
+// version is the fallback for builds without embedded package information,
+// such as `go run` and tests. `mygo build` stamps mygo.json's version.
+var version = "0.6.0-dev"
+
+// appVersion reports the version to show in the UI.
+func appVersion() string {
+	if v := mygo.App.Version(); v != "" {
+		return v
+	}
+	return version
+}
+
 type page int
 
 const (
@@ -184,6 +196,12 @@ type app struct {
 	outputDirs map[output.Op]string
 	notice     string
 
+	// pending holds launches that arrived during a batch; the batch end
+	// drains them so multi-select right-click actions are never dropped.
+	pendingPaths    []string
+	pendingQuick    imageio.Format
+	hasPendingQuick bool
+
 	gen      int
 	thumbSem chan struct{}
 }
@@ -253,6 +271,7 @@ func main() {
 
 	mygo.Theme.SetSource(mygo.ThemeSystem)
 	mygo.App.OnSecondInstance(a.secondInstance)
+	mygo.App.OnOpenFile(a.openFile)
 	mygo.App.WhenReady(func() { a.start(launchArgs) })
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
@@ -332,6 +351,10 @@ func (a *app) secondInstance(args []string, _ string) {
 	if a.win == nil {
 		return
 	}
+	if a.busy {
+		a.queueLaunch(l)
+		return
+	}
 	a.win.Update(func() {
 		if l.hasQuick {
 			a.applyQuickFormat(l.quick)
@@ -343,6 +366,52 @@ func (a *app) secondInstance(args []string, _ string) {
 		}
 		a.win.Show()
 		a.win.Focus()
+	})
+}
+
+// openFile queues a file the shell opened with the app, such as "Open with"
+// or a double click on an associated image.
+func (a *app) openFile(path string) {
+	a.addTargets([]string{path}, nil)
+	if a.win != nil {
+		a.win.Show()
+		a.win.Focus()
+	}
+}
+
+// queueLaunch remembers a launch that arrived while a batch was running.
+// Windows invokes a context-menu command once per selected file, so a
+// multi-select quick conversion becomes several second instances.
+func (a *app) queueLaunch(l launch) {
+	a.pendingPaths = append(a.pendingPaths, l.paths...)
+	if l.hasQuick {
+		a.pendingQuick, a.hasPendingQuick = l.quick, true
+	}
+	a.notice = "当前任务结束后处理新的请求。"
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+}
+
+// drainPending starts whatever launch was queued during the batch. It runs
+// inside the batch-finishing update, when busy is already false.
+func (a *app) drainPending() {
+	paths := a.pendingPaths
+	quick, hasQuick := a.pendingQuick, a.hasPendingQuick
+	a.pendingPaths, a.hasPendingQuick = nil, false
+	if len(paths) == 0 && !hasQuick {
+		return
+	}
+	if hasQuick {
+		a.applyQuickFormat(quick)
+	}
+	if len(paths) == 0 {
+		return
+	}
+	a.addTargets(paths, func() {
+		if hasQuick {
+			a.startConvert()
+		}
 	})
 }
 

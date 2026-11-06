@@ -1,0 +1,23 @@
+{
+  "name": "SmartImage",
+  "slug": "smartimage",
+  "identifier": "io.github.shirolin.smartimage",
+  "version": "0.6.0",
+  "copyright": "© 2026 Shirolin",
+  "publisher": "Shirolin",
+  "main": "./cmd/smartimage",
+  "out": "dist",
+  "resources": [
+    "models",
+    "bin/matting-worker.exe"
+  ],
+  "fileAssociations": [
+    {
+      "ext": ["png", "jpg", "jpeg", "jfif", "webp", "avif", "gif", "bmp", "tif", "tiff"],
+      "name": "图像"
+    }
+  ],
+  "windows": {
+    "installerInclude": "scripts/installer.nsh"
+  }
+}

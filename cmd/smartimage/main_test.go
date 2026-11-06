@@ -403,6 +403,24 @@ func TestParseLaunch(t *testing.T) {
 	}
 }
 
+func TestQueuedLaunchKeepsPathsAndFormat(t *testing.T) {
+	a := newTestApp(t)
+	a.busy = true
+	a.page = pageResize
+	a.queueLaunch(launch{paths: []string{`D:\pics\a.png`}, quick: imageio.PNG, hasQuick: true})
+	if len(a.pendingPaths) != 1 || !a.hasPendingQuick || a.pendingQuick != imageio.PNG {
+		t.Fatalf("queued = %v/%v/%v, want one path and png", a.pendingPaths, a.hasPendingQuick, a.pendingQuick)
+	}
+
+	// The paths need real files, so drain the format alone.
+	a.busy = false
+	a.pendingPaths = nil
+	a.drainPending()
+	if a.page != pageConvert || a.format != imageio.PNG || a.hasPendingQuick {
+		t.Fatalf("after drain: page=%v format=%v pending=%v", a.page, a.format, a.hasPendingQuick)
+	}
+}
+
 // TestRenderPreview writes a headless rendering for visual review. It is
 // opt-in so ordinary test runs never produce artifacts.
 func TestRenderPreview(t *testing.T) {

@@ -535,6 +535,13 @@ func (a *app) mattingWorkerPath() string {
 	if p := strings.TrimSpace(os.Getenv("SMARTIMAGE_MATTING_WORKER")); p != "" {
 		return p
 	}
+	// Packaged builds ship the worker as a resource next to the executable.
+	if dir, err := mygo.App.Path(mygo.PathResources); err == nil {
+		p := filepath.Join(dir, "matting-worker.exe")
+		if fileExists(p) {
+			return p
+		}
+	}
 	if dir := executableDir(); dir != "" {
 		p := filepath.Join(dir, "matting-worker.exe")
 		if fileExists(p) {
@@ -547,17 +554,22 @@ func (a *app) mattingWorkerPath() string {
 	return ""
 }
 
-// mattingModelDir prefers models next to the executable, then the repository
-// checkout used by `go run`.
+// mattingModelDir prefers the packaged resources, then models next to the
+// executable, then the repository checkout used by `go run`.
 func (a *app) mattingModelDir() string {
 	if p := strings.TrimSpace(os.Getenv("SMARTIMAGE_MODELS_DIR")); p != "" {
 		return p
 	}
+	var candidates []string
+	if dir, err := mygo.App.Path(mygo.PathResources); err == nil {
+		candidates = append(candidates, filepath.Join(dir, "models"))
+	}
 	if dir := executableDir(); dir != "" {
-		for _, candidate := range []string{filepath.Join(dir, "models"), filepath.Join(dir, "..", "models")} {
-			if fileExists(filepath.Join(candidate, "u2net.onnx")) || fileExists(filepath.Join(candidate, "u2netp.onnx")) {
-				return candidate
-			}
+		candidates = append(candidates, filepath.Join(dir, "models"), filepath.Join(dir, "..", "models"))
+	}
+	for _, candidate := range candidates {
+		if fileExists(filepath.Join(candidate, "u2net.onnx")) || fileExists(filepath.Join(candidate, "u2netp.onnx")) {
+			return candidate
 		}
 	}
 	return "models"
@@ -673,6 +685,7 @@ func (a *app) startBatch(op output.Op, run func(context.Context, []string, ops.P
 			a.cancel = nil
 			a.done = len(results)
 			a.summarize(op, targets)
+			a.drainPending()
 		})
 	}()
 }

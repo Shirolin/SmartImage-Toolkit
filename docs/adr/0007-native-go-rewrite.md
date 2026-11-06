@@ -38,4 +38,4 @@
 - 2026-11-05：P3 构图完成：新增 `internal/ops/center` 与 `internal/ops/padaspect`，共享 `ops.Fill` 填充色与 trim 的主体包围盒探测；「构图」页以标签切换两个模式，扩边预览目标画布。
 - 2026-11-05：P4 切图完成：新增 `internal/ops/split`（纯几何 `Grid`/`EqualDivide` + 切片落盘）与工作台「切图」页的原生画布编辑器；切割线按原图像素保存，预览位图长边最多 2048 px；每片居中复用 `center.Recenter`。
 - 2026-11-06：P5 AI 抠图完成：worker 进程方案落地（ADR 0008），新增 `internal/ops/matting`、`worker/matting` 与「抠图」页；模型下载与 worker 构建脚本见 `scripts/`。
-- 后续按 [`docs/product/rewrite-plan.md`](../product/rewrite-plan.md) 的 P6 推进安装与分发。
+- 2026-11-06：P6 分发完成：采用 `go tool mygo build` 产出按用户安装的 NSIS 安装包（ADR 0009），worker、模型与 VC++ 运行库随包分发，安装器注册右键菜单与「打开方式」，卸载保留用户设置。P1–P6 全部交付。

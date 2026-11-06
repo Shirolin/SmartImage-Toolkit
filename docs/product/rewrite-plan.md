@@ -1,6 +1,6 @@
 # SmartImage Go 重写：功能盘点与产品设计
 
-> 状态：已确认，P1、P2、P3、P4、P5 已实现。
+> 状态：已确认，P1、P2、P3、P4、P5、P6 已实现。
 > 日期：2026-11-05
 
 ## 一、旧版入口
@@ -181,6 +181,10 @@ P4 与旧版的差异（有意为之）：编辑器只处理队列中当前选�
 P5 已完成：「抠图」页使用本地 ONNX 推理，完全离线。模型分快速（U2-Netp，~4.5 MB）与精细（U2-Net，~168 MB）两档，默认精细；一个批次只启动一个 worker，模型加载一次后逐张处理。边缘羽化 0–3 px 只作用于 alpha。输出保留直通 alpha，源为 PNG/WebP/AVIF 时保持原格式，JPEG 回落 PNG 并说明。产物后缀 `_nobg`，子目录默认 `matting`。worker 为独立进程（Rust + ONNX Runtime）；崩溃只影响当前批次，取消即终止进程，下一批重新启动。
 
 P5 与旧版的差异（有意为之）：不再依赖 Node 与 AGPL 的 `@imgly/background-removal-node`；模型授权与分发策略见 [`docs/adr/0008-matting-worker.md`](../adr/0008-matting-worker.md)。质量基线以样张人工验收为准，不追求与旧模型逐像素一致。
+
+P6 已完成：`go tool mygo build` 产出按用户安装的 NSIS 安装包 `smartimage-setup-<版本>-amd64.exe`，安装到 `%LOCALAPPDATA%\Programs\SmartImage`，无需管理员；开始菜单快捷方式、卸载项与图片「打开方式」由安装器注册，安装器钩子另外写入两项右键菜单（「用 SmartImage 打开」「转成 WebP」），卸载时清理。worker、两档模型与 VC++ 运行库随包分发，缺失运行库时安装器静默安装。升级方式是运行新版本安装器；卸载保留 `%APPDATA%\SmartImage` 的设置。分发决策见 [`docs/adr/0009-windows-distribution.md`](../adr/0009-windows-distribution.md)。
+
+P6 与旧版的差异（有意为之）：不再依赖 Node 与便携包；右键入口改为安装器注册的经典菜单项（Windows 11 在「显示更多选项」中），不注册级联 COM 菜单；暂未配置代码签名，对外分发前需补证书与 SmartScreen 信誉。
 
 ## 七、已确认的决策
 
