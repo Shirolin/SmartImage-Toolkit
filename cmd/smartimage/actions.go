@@ -844,14 +844,6 @@ func (a *app) openOutputDir() {
 	openPath(dir)
 }
 
-func revealFile(path string) {
-	if runtime.GOOS == "windows" {
-		_ = exec.Command("explorer.exe", "/select,"+path).Start()
-		return
-	}
-	openPath(filepath.Dir(path))
-}
-
 func openPath(path string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
