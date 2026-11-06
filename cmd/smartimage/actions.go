@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/center"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/crop"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/matting"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/padaspect"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/resize"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/split"
@@ -402,6 +404,8 @@ func (a *app) startCurrent() {
 		a.startPad()
 	case output.Split:
 		a.startSplit()
+	case output.Matting:
+		a.startMatting()
 	default:
 		a.startConvert()
 	}
@@ -519,7 +523,105 @@ func (a *app) startSplit() {
 	}()
 }
 
+// Matting model presets. The files are resolved next to the executable.
+const (
+	mattingFine = "fine"
+	mattingFast = "fast"
+)
+
+// mattingWorkerPath finds the sidecar. The environment override keeps tests
+// and development builds independent of the install layout.
+func (a *app) mattingWorkerPath() string {
+	if p := strings.TrimSpace(os.Getenv("SMARTIMAGE_MATTING_WORKER")); p != "" {
+		return p
+	}
+	if dir := executableDir(); dir != "" {
+		p := filepath.Join(dir, "matting-worker.exe")
+		if fileExists(p) {
+			return p
+		}
+	}
+	if p, err := filepath.Abs(filepath.Join("worker", "matting", "target", "release", "matting-worker.exe")); err == nil && fileExists(p) {
+		return p
+	}
+	return ""
+}
+
+// mattingModelDir prefers models next to the executable, then the repository
+// checkout used by `go run`.
+func (a *app) mattingModelDir() string {
+	if p := strings.TrimSpace(os.Getenv("SMARTIMAGE_MODELS_DIR")); p != "" {
+		return p
+	}
+	if dir := executableDir(); dir != "" {
+		for _, candidate := range []string{filepath.Join(dir, "models"), filepath.Join(dir, "..", "models")} {
+			if fileExists(filepath.Join(candidate, "u2net.onnx")) || fileExists(filepath.Join(candidate, "u2netp.onnx")) {
+				return candidate
+			}
+		}
+	}
+	return "models"
+}
+
+func (a *app) mattingModelPath() string {
+	name := "u2net.onnx"
+	if a.mattingPreset == mattingFast {
+		name = "u2netp.onnx"
+	}
+	return filepath.Join(a.mattingModelDir(), name)
+}
+
+func (a *app) mattingError() error {
+	if a.mattingWorkerPath() == "" {
+		return errors.New("缺少抠图引擎 matting-worker.exe")
+	}
+	model := a.mattingModelPath()
+	if !fileExists(model) {
+		return fmt.Errorf("缺少模型文件 %s", model)
+	}
+	return nil
+}
+
+func (a *app) startMatting() {
+	if err := a.mattingError(); err != nil {
+		a.notice = err.Error()
+		return
+	}
+	cfg := matting.Config{
+		WorkerPath: a.mattingWorkerPath(),
+		ModelPath:  a.mattingModelPath(),
+		Feather:    int(math.Round(a.mattingFeather)),
+		Format:     a.mattingFormat,
+		Policy:     a.policy(),
+	}
+	a.startBatch(output.Matting, func(ctx context.Context, paths []string, progress ops.Progress) []ops.Result {
+		// One engine, one thread pool, one image at a time keeps memory flat.
+		return matting.RunAll(ctx, paths, cfg, progress)
+	})
+}
+
+func executableDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 func (a *app) startRun(op output.Op, job ops.Job) {
+	a.startBatch(op, func(ctx context.Context, paths []string, progress ops.Progress) []ops.Result {
+		return ops.RunAll(ctx, paths, a.settings.Concurrency, job, progress)
+	})
+}
+
+// startBatch owns the queue lifecycle shared by every operation. run does the
+// work for the paths and may use fewer workers than the concurrency setting.
+func (a *app) startBatch(op output.Op, run func(context.Context, []string, ops.Progress) []ops.Result) {
 	if a.busy {
 		return
 	}
@@ -552,7 +654,7 @@ func (a *app) startRun(op output.Op, job ops.Job) {
 	}
 
 	go func() {
-		results := ops.RunAll(ctx, paths, a.settings.Concurrency, job,
+		results := run(ctx, paths,
 			func(done, total int, r ops.Result) {
 				a.update(func() {
 					if f := targetSet[fileKey(r.File)]; f != nil {

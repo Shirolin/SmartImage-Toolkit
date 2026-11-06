@@ -40,6 +40,9 @@ func (a *app) sidebar(c *ui.Context) {
 			if components.SidebarItem(c, "切图", lucide.SquareSplitVertical(), a.page == pageSplit).Clicked() {
 				a.setPage(pageSplit)
 			}
+			if components.SidebarItem(c, "抠图", lucide.WandSparkles(), a.page == pageMatting).Clicked() {
+				a.setPage(pageMatting)
+			}
 		})
 		ui.Spacer(c)
 		components.SidebarSection(c, "应用", func() {
@@ -47,7 +50,7 @@ func (a *app) sidebar(c *ui.Context) {
 				a.setPage(pageSettings)
 			}
 		})
-		components.Text(c, "原生版 · P4").FontSize(11).TextColor(t.TextMuted).PaddingStart(t.Space(1))
+		components.Text(c, "原生版 · P5").FontSize(11).TextColor(t.TextMuted).PaddingStart(t.Space(1))
 	})
 }
 
@@ -69,6 +72,8 @@ func (a *app) titlebar(c *ui.Context) {
 		}
 	case pageSplit:
 		title = "切图 · 切割线编辑器"
+	case pageMatting:
+		title = "抠图 · 本地 AI 去背景"
 	case pageSettings:
 		title = "设置"
 	}
@@ -95,6 +100,8 @@ func (a *app) content(c *ui.Context) {
 			a.workPage(c, a.figureToolbar)
 		case pageSplit:
 			a.splitPage(c)
+		case pageMatting:
+			a.workPage(c, a.mattingToolbar)
 		default:
 			a.workPage(c, a.convertToolbar)
 		}
@@ -354,6 +361,44 @@ func (a *app) figureToolbar(c *ui.Context) {
 	})
 }
 
+var mattingFormatChoices = []string{"original", "webp", "png", "avif"}
+
+func (a *app) mattingToolbar(c *ui.Context) {
+	t := c.Theme()
+	panel(c, func() {
+		ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			components.Text(c, "模型").FontSize(12).TextColor(t.TextMuted)
+			if selectControl(c, &a.mattingPreset, 160, mattingPresetLabel,
+				[]string{mattingFine, mattingFast}, a.busy) {
+				a.resetOp(output.Matting)
+			}
+			components.Text(c, "边缘羽化").FontSize(12).TextColor(t.TextMuted)
+			if numberField(c, &a.mattingFeather, 0, 3, 1, 64, "边缘羽化像素") {
+				a.resetOp(output.Matting)
+			}
+			components.Text(c, "px").FontSize(12).TextColor(t.TextMuted)
+			if err := a.mattingError(); err != nil {
+				components.Text(c, err.Error()).FontSize(11).TextColor(t.Warning).SingleLine()
+			} else {
+				components.Text(c, "本地推理，逐张处理；透明通道会保留").FontSize(11).TextColor(t.TextMuted)
+			}
+			ui.Spacer(c)
+		})
+		a.outputRows(c, func() {
+			if selectControl(c, &a.mattingFormat, 132, opFormatLabel, mattingFormatChoices, a.busy) {
+				a.resetOp(output.Matting)
+			}
+		})
+	})
+}
+
+func mattingPresetLabel(p string) string {
+	if p == mattingFast {
+		return "快速（U2-Netp）"
+	}
+	return "精细（U2-Net）"
+}
+
 // outputRows builds the controls shared by every operation page: export
 // format, output location and file actions.
 func (a *app) outputRows(c *ui.Context, formatControl func()) {
@@ -606,7 +651,8 @@ func (a *app) actionBar(c *ui.Context, op output.Op) {
 			} else {
 				disabled := len(a.convertible(op)) == 0 ||
 					(op == output.Crop && a.cropEmpty()) ||
-					(op == output.Pad && a.padError() != nil)
+					(op == output.Pad && a.padError() != nil) ||
+					(op == output.Matting && a.mattingError() != nil)
 				primary := components.Button(c, a.startLabel(op), components.ButtonPrimary).Disabled(disabled)
 				if primary.Clicked() {
 					a.startCurrent()
@@ -640,6 +686,8 @@ func opVerb(op output.Op) string {
 		return "开始居中"
 	case output.Pad:
 		return "开始扩边"
+	case output.Matting:
+		return "开始抠图"
 	default:
 		return "开始转换"
 	}
@@ -657,6 +705,8 @@ func (a *app) operationHint(op output.Op) string {
 		return "识别主体后重新分配四周留白，画布尺寸不变。"
 	case output.Pad:
 		return "按目标比例新建画布，主体等比缩小后居中。"
+	case output.Matting:
+		return "本地 AI 逐张去除背景，输出带透明通道的图片。"
 	default:
 		return "选择目标格式后批量转换。"
 	}
@@ -705,8 +755,8 @@ func (a *app) settingsPage(c *ui.Context) {
 			})
 
 			settingsCard(c, "关于", func() {
-				a.settingRow(c, "版本", "Go 原生重写 · P4", func() {
-					components.Text(c, "0.4.0").FontSize(12).TextColor(t.TextMuted)
+				a.settingRow(c, "版本", "Go 原生重写 · P5", func() {
+					components.Text(c, "0.5.0").FontSize(12).TextColor(t.TextMuted)
 				})
 				path, err := settings.Path()
 				if err == nil {

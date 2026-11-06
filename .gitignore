@@ -10,3 +10,7 @@ bin/
 
 # Go rewrite scratch
 .tmp/
+
+# Matting worker build output and local models
+worker/matting/target/
+models/

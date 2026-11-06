@@ -75,9 +75,13 @@ go test ./...                                        # Go 质量门禁
 
 ```powershell
 go build -trimpath -ldflags "-s -w" -o bin/smartimage.exe ./cmd/smartimage
+pwsh -File scripts/build-matting-worker.ps1   # 需要 Rust 工具链
+pwsh -File scripts/fetch-matting-models.ps1   # 约 172 MB，验 SHA-256
 pwsh -File scripts/install-sendto.ps1
 # 移除：pwsh -File scripts/install-sendto.ps1 -Uninstall
 ```
+
+抠图需要 `matting-worker.exe` 与 `models/` 与主程序放在同一目录（开发时 `models/` 在仓库根目录亦可）。未安装时其他功能照常使用，「抠图」页会给出缺少文件的提示。
 
 生成两个入口：「转成 WebP (SmartImage)」直接转换选中的图片；「SmartImage 图片工具」打开工作台并导入选中的图片。
 
@@ -87,7 +91,9 @@ P2 已完成：缩放（按宽/高/百分比/自定义，支持 cover/contain/fi
 
 P3 已完成：智能居中（容差 + 参与边 + 填充色，画布尺寸不变）、画布扩边（16:9 / 9:16 / 1:1 / 4:5 / 自定义比例，长边、主体占比与填充色可调，预览目标画布）。
 
-P4 已完成：原生切图编辑器——竖线/横线/平移模式，点击加线、Alt 反向、拖动移动、双击删除、吸附、滚轮缩放与平移，等分行列，最多 500 片实时计数，每片可选智能居中；导出为原图命名的新文件夹（`_rNN_cNN`）。后续 AI 抠图见 [`docs/product/rewrite-plan.md`](docs/product/rewrite-plan.md)，架构决策见 [`docs/adr/0007-native-go-rewrite.md`](docs/adr/0007-native-go-rewrite.md)。
+P4 已完成：原生切图编辑器——竖线/横线/平移模式，点击加线、Alt 反向、拖动移动、双击删除、吸附、滚轮缩放与平移，等分行列，最多 500 片实时计数，每片可选智能居中；导出为原图命名的新文件夹（`_rNN_cNN`）。
+
+P5 已完成：本地 AI 抠图——独立 Rust worker + ONNX Runtime + U2-Net（快速/精细两档），完全离线；边缘羽化只作用于 alpha，透明通道保留，JPEG 自动回落 PNG；统一队列、进度、取消与输出规则（`_nobg`）。worker 与模型许可、分发方式见 [`docs/adr/0008-matting-worker.md`](docs/adr/0008-matting-worker.md)。架构决策见 [`docs/adr/0007-native-go-rewrite.md`](docs/adr/0007-native-go-rewrite.md)。
 
 ## 🛠️ 开发
 

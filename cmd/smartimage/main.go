@@ -1,6 +1,6 @@
 // Command smartimage is the native desktop workbench for SmartImage, built
 // with MyGo and Onevra. It keeps one file queue and applies the operation of
-// the selected page: convert, resize, trim, crop, center, pad or split.
+// the selected page: convert, resize, trim, crop, center, pad, split or matte.
 package main
 
 import (
@@ -33,6 +33,7 @@ const (
 	pageEdge
 	pageFigure
 	pageSplit
+	pageMatting
 	pageSettings
 )
 
@@ -167,6 +168,10 @@ type app struct {
 	splitRows      float64
 	splitCols      float64
 
+	mattingPreset  string
+	mattingFormat  string
+	mattingFeather float64
+
 	files []*fileItem
 	index map[string]*fileItem
 	list  components.ListState
@@ -231,6 +236,9 @@ func main() {
 		splitFormat:     "original",
 		splitRows:       2,
 		splitCols:       2,
+		mattingPreset:   mattingFine,
+		mattingFormat:   "original",
+		mattingFeather:  0,
 		index:           make(map[string]*fileItem),
 		summaries:       make(map[output.Op]string),
 		outputDirs:      make(map[output.Op]string),
@@ -383,6 +391,8 @@ func (a *app) currentOp() output.Op {
 		return output.Center
 	case pageSplit:
 		return output.Split
+	case pageMatting:
+		return output.Matting
 	default:
 		return output.Convert
 	}

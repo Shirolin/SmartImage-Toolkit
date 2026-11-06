@@ -56,6 +56,9 @@ func newTestApp(t *testing.T) *app {
 		splitFormat:     "original",
 		splitRows:       2,
 		splitCols:       2,
+		mattingPreset:   mattingFine,
+		mattingFormat:   "original",
+		mattingFeather:  0,
 		index:           make(map[string]*fileItem),
 		summaries:       make(map[output.Op]string),
 		outputDirs:      make(map[output.Op]string),
@@ -194,6 +197,12 @@ func TestSidebarNavigatesBetweenPages(t *testing.T) {
 	}
 	if a.page != pageSplit {
 		t.Fatalf("page = %v, want split", a.page)
+	}
+	if err := tt.Click("抠图"); err != nil {
+		t.Fatalf("click matting: %v", err)
+	}
+	if a.page != pageMatting {
+		t.Fatalf("page = %v, want matting", a.page)
 	}
 	if err := tt.Click("设置"); err != nil {
 		t.Fatalf("click settings: %v", err)
@@ -361,6 +370,19 @@ func TestSplitEditorLeavesWithTheQueue(t *testing.T) {
 	}
 }
 
+func TestMattingPageShowsModelAndFormat(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageMatting
+	a.files = []*fileItem{{path: `D:\pics\photo.png`, name: "photo.png", size: 1000, width: 100, height: 80}}
+
+	tt := render(t, a)
+	for _, want := range []string{"模型", "精细（U2-Net）", "输出格式", "开始抠图"} {
+		if !tt.HasText(want) {
+			t.Fatalf("matting page is missing %q; texts = %v", want, tt.Texts())
+		}
+	}
+}
+
 func TestParseLaunch(t *testing.T) {
 	l := parseLaunch([]string{"--quick", "webp", `D:\pics\a.png`, `D:\pics\b.jpg`})
 	if !l.hasQuick || l.quick != imageio.WebP {
@@ -435,6 +457,15 @@ func TestRenderPreview(t *testing.T) {
 			imgW: w, imgH: h, dispW: w, dispH: h, snap: true,
 			cutX: []int{w / 3, w * 2 / 3}, cutY: []int{h / 2},
 		}
+	case "matting":
+		a.page = pageMatting
+		f := &fileItem{path: `D:\pics\cover.png`, name: "cover.png", size: 2_400_000, width: 1920, height: 1080}
+		f.setResult(output.Matting, opResult{
+			status: statusSuccess, output: `D:\pics\cover_nobg.png`, outputSize: 1_200_000,
+			width: 1920, height: 1080,
+		})
+		a.files = []*fileItem{f}
+		a.summaries[output.Matting] = "完成 1 个 · 节省 1.1 MB"
 	case "center", "pad":
 		a.page = pageFigure
 		if os.Getenv("SMARTIMAGE_PREVIEW_PAGE") == "pad" {

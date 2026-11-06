@@ -6,7 +6,7 @@
 
 ### Operator（算子）
 
-对图像执行特定几何或像素变换的领域功能单元（例如 `center` 居中、`pad_aspect` 比例扩边、`trim` 去边、`resize` 缩放、`rmbg_solid` AI 抠图、`split` 切片）。算子对外提供纯变换逻辑。
+对图像执行特定几何或像素变换的领域功能单元（例如 `center` 居中、`pad_aspect` 比例扩边、`trim` 去边、`resize` 缩放、`matting` AI 抠图、`split` 切片）。算子对外提供纯变换逻辑。
 
 ### Recipe（变换配方）
 
