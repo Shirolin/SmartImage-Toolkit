@@ -43,6 +43,23 @@ func TestSubfolderUsesDefaultPerOperation(t *testing.T) {
 	}
 }
 
+func TestEdgeOperationsAddTheirSuffix(t *testing.T) {
+	policy := Policy{Location: settings.SameDir}
+	cases := map[Op]string{
+		Trim: "photo_trimmed",
+		Crop: "photo_cropped",
+	}
+	for op, want := range cases {
+		_, base, _, err := policy.Target(filepath.Join("pics", "photo.png"), ".png", op)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if base != want {
+			t.Fatalf("%s base = %q, want %q", op, base, want)
+		}
+	}
+}
+
 func TestCustomDirRequiresPath(t *testing.T) {
 	policy := Policy{Location: settings.CustomDir}
 	if _, _, _, err := policy.Target("photo.png", ".webp", Convert); err == nil {

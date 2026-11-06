@@ -118,6 +118,9 @@ func (a *app) selectSplitFile(item *fileItem) {
 			st.bitmap = bmp
 			st.imgW, st.imgH = origW, origH
 			st.dispW, st.dispH = db.Dx(), db.Dy()
+			// Start new images from the equal-divide fields, so the shown
+			// rows and columns match the tiles that will be cut.
+			a.applySplitDivide()
 		})
 	}()
 	if old != nil && old.bitmap != nil {
@@ -331,7 +334,11 @@ func (a *app) splitCanvas(c *ui.Context) {
 		return
 	}
 	e.Focusable()
-	e.DrawOver(func(p *ui.Painter, r ui.Rect) { a.paintSplit(p, r, st) })
+	// DrawOver runs after the element's own clip pops, so clip the canvas
+	// here; otherwise a zoomed image paints over the toolbar.
+	e.DrawOver(func(p *ui.Painter, r ui.Rect) {
+		p.Clip(r, t.Radius, func() { a.paintSplit(p, r, st) })
+	})
 	e.HandleInput(func(ev ui.InputEvent) bool { return a.splitInput(ev, st) })
 }
 

@@ -40,5 +40,8 @@ func TestRunAllMarksUnstartedAsCanceled(t *testing.T) {
 		if r.Status != StatusCanceled {
 			t.Fatalf("results[%d].Status = %q, want canceled", i, r.Status)
 		}
+		if r.File != []string{"a", "b"}[i] {
+			t.Fatalf("results[%d].File = %q, want the source path", i, r.File)
+		}
 	}
 }

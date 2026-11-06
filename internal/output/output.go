@@ -58,6 +58,10 @@ func (op Op) Suffix() string {
 	switch op {
 	case Resize:
 		return "_resized"
+	case Trim:
+		return "_trimmed"
+	case Crop:
+		return "_cropped"
 	case Center:
 		return "_centered"
 	case Pad:

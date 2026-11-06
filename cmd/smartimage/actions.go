@@ -228,6 +228,11 @@ func (a *app) setConvertFormat(f imageio.Format) {
 	if a.busy {
 		return
 	}
+	// Re-selecting the current format keeps earlier results; clearing them
+	// would re-convert every file on the next multi-select request.
+	if a.format == f {
+		return
+	}
 	a.format = f
 	a.settings.Format = string(f)
 	a.persist()
@@ -635,10 +640,12 @@ func (a *app) startRun(op output.Op, job ops.Job) {
 // work for the paths and may use fewer workers than the concurrency setting.
 func (a *app) startBatch(op output.Op, run func(context.Context, []string, ops.Progress) []ops.Result) {
 	if a.busy {
+		a.chained = false
 		return
 	}
 	targets := a.convertible(op)
 	if len(targets) == 0 {
+		a.chained = false
 		a.notice = "没有待处理的文件。"
 		return
 	}
@@ -684,6 +691,7 @@ func (a *app) startBatch(op output.Op, run func(context.Context, []string, ops.P
 			a.busy = false
 			a.cancel = nil
 			a.done = len(results)
+			a.notice = ""
 			a.summarize(op, targets)
 			a.drainPending()
 		})
@@ -727,9 +735,15 @@ func (a *app) cancelRun() {
 }
 
 func (a *app) summarize(op output.Op, targets []*fileItem) {
-	var ok, skipped, failed, canceled int
-	var saved int64
-	dir := ""
+	if !a.chained {
+		a.runOK, a.runSkipped, a.runFailed, a.runCanceled = 0, 0, 0, 0
+		a.runSaved = 0
+		a.runDir = ""
+	}
+	a.chained = false
+	ok, skipped, failed, canceled := a.runOK, a.runSkipped, a.runFailed, a.runCanceled
+	saved := a.runSaved
+	dir := a.runDir
 	for _, f := range targets {
 		r := f.result(op)
 		switch r.status {
@@ -747,6 +761,8 @@ func (a *app) summarize(op output.Op, targets []*fileItem) {
 			canceled++
 		}
 	}
+	a.runOK, a.runSkipped, a.runFailed, a.runCanceled = ok, skipped, failed, canceled
+	a.runSaved = saved
 
 	parts := make([]string, 0, 4)
 	if ok > 0 {
@@ -771,6 +787,7 @@ func (a *app) summarize(op output.Op, targets []*fileItem) {
 	} else {
 		a.summaries[op] = strings.Join(parts, " · ")
 	}
+	a.runDir = dir
 	if dir != "" {
 		a.outputDirs[op] = dir
 	}

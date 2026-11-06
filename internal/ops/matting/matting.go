@@ -136,7 +136,12 @@ func (e *Engine) Process(ctx context.Context, img image.Image) (*image.NRGBA, er
 		}
 		return r.img, r.err
 	case <-ctx.Done():
-		e.kill()
+		// Process holds e.mu; mark the engine dead directly instead of
+		// calling kill, which would lock the mutex again.
+		e.dead = true
+		if e.cmd.Process != nil {
+			_ = e.cmd.Process.Kill()
+		}
 		return nil, ctx.Err()
 	}
 }

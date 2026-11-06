@@ -202,6 +202,12 @@ type app struct {
 	pendingQuick    imageio.Format
 	hasPendingQuick bool
 
+	// chained merges the summaries of a queue drained from pending launches.
+	chained                                   bool
+	runOK, runSkipped, runFailed, runCanceled int
+	runSaved                                  int64
+	runDir                                    string
+
 	gen      int
 	thumbSem chan struct{}
 }
@@ -271,7 +277,6 @@ func main() {
 
 	mygo.Theme.SetSource(mygo.ThemeSystem)
 	mygo.App.OnSecondInstance(a.secondInstance)
-	mygo.App.OnOpenFile(a.openFile)
 	mygo.App.WhenReady(func() { a.start(launchArgs) })
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
@@ -369,16 +374,6 @@ func (a *app) secondInstance(args []string, _ string) {
 	})
 }
 
-// openFile queues a file the shell opened with the app, such as "Open with"
-// or a double click on an associated image.
-func (a *app) openFile(path string) {
-	a.addTargets([]string{path}, nil)
-	if a.win != nil {
-		a.win.Show()
-		a.win.Focus()
-	}
-}
-
 // queueLaunch remembers a launch that arrived while a batch was running.
 // Windows invokes a context-menu command once per selected file, so a
 // multi-select quick conversion becomes several second instances.
@@ -408,6 +403,9 @@ func (a *app) drainPending() {
 	if len(paths) == 0 {
 		return
 	}
+	// The follow-up conversion continues the same multi-select request, so
+	// its summary adds to the one already shown.
+	a.chained = hasQuick
 	a.addTargets(paths, func() {
 		if hasQuick {
 			a.startConvert()

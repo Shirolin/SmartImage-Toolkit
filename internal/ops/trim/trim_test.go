@@ -134,7 +134,7 @@ func TestTrimUsesOperationSubfolder(t *testing.T) {
 	if filepath.Dir(got.Output) != filepath.Join(dir, "trimmed") {
 		t.Fatalf("output dir = %q, want %s", filepath.Dir(got.Output), filepath.Join(dir, "trimmed"))
 	}
-	if !strings.HasSuffix(got.Output, "photo.png") {
+	if !strings.HasSuffix(got.Output, "photo_trimmed.png") {
 		t.Fatalf("output = %q", got.Output)
 	}
 }

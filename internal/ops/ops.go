@@ -83,13 +83,15 @@ feed:
 	wg.Wait()
 
 	// A canceled batch leaves unfed entries zero-valued; report them as
-	// canceled so the UI does not keep them as running forever.
+	// canceled, with their path, so the UI does not keep them as running
+	// and can match them to their row.
 	finished := results[:0]
-	for _, r := range results {
-		if r.Status == "" {
-			r.Status = StatusCanceled
+	for i := range results {
+		if results[i].Status == "" {
+			results[i].Status = StatusCanceled
+			results[i].File = paths[i]
 		}
-		finished = append(finished, r)
+		finished = append(finished, results[i])
 	}
 	return finished
 }
