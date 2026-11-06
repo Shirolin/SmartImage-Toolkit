@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -716,6 +717,7 @@ func (a *app) settingsPage(c *ui.Context) {
 	t := c.Theme()
 	ui.Scroll(c).Fill().Children(func() {
 		ui.Column(c).FillWidth().Gap(t.Space(3)).Padding(0, t.Space(1), t.Space(4), 0).Children(func() {
+			a.noticeBanner(c)
 			components.Text(c, "修改后自动保存，下次启动继续使用。").FontSize(12).TextColor(t.TextMuted)
 
 			settingsCard(c, "输出", func() {
@@ -754,6 +756,13 @@ func (a *app) settingsPage(c *ui.Context) {
 				})
 			})
 
+			if runtime.GOOS == "windows" {
+				settingsCard(c, "快捷方式", func() {
+					a.shortcutRow(c, shortcutStartMenu)
+					a.shortcutRow(c, shortcutDesktop)
+				})
+			}
+
 			settingsCard(c, "关于", func() {
 				a.settingRow(c, "版本", "Go 原生重写 · P6", func() {
 					components.Text(c, appVersion()).FontSize(12).TextColor(t.TextMuted)
@@ -781,6 +790,21 @@ func (a *app) settingRow(c *ui.Context, label, hint string, control func()) {
 			}
 		})
 		control()
+	})
+}
+
+// shortcutRow shows whether the app is pinned to a place and offers the
+// matching add or remove action.
+func (a *app) shortcutRow(c *ui.Context, k shortcutKind) {
+	hint := "未添加"
+	label := "添加"
+	if shortcutExists(k) {
+		hint, label = "已添加", "移除"
+	}
+	a.settingRow(c, k.label(), hint, func() {
+		if components.Button(c, label, components.ButtonOutline).Clicked() {
+			a.toggleShortcut(k)
+		}
 	})
 }
 
