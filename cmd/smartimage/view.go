@@ -125,6 +125,10 @@ func (a *app) workPage(c *ui.Context, toolbar func(*ui.Context)) {
 }
 
 func (a *app) noticeBanner(c *ui.Context) {
+	if a.countdown > 0 {
+		a.countdownBanner(c)
+		return
+	}
 	if a.notice == "" {
 		return
 	}
@@ -134,9 +138,35 @@ func (a *app) noticeBanner(c *ui.Context) {
 		components.Icon(c, lucide.Info()).Size(16, 16).TextColor(t.TextMuted).Shrink(0)
 		components.Text(c, a.notice).FontSize(12).Grow(1).MinWidth(0).SingleLine()
 		if components.IconButton(c, lucide.X(), "关闭提示", components.IconButtonCompact).Clicked() {
+			if a.countdown > 0 {
+				a.cancelAutoClose()
+			}
 			a.notice = ""
 		}
 	})
+}
+
+// countdownBanner takes over the notice slot while the window is about to
+// close: accent fill and border, a draining bar and a labelled way out.
+func (a *app) countdownBanner(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).FillWidth().Padding(t.Space(3)).Gap(t.Space(2)).
+		Background(t.Accent.Alpha(0.12)).Border(1, t.Accent.Alpha(0.6)).Radius(t.Radius * 1.2).
+		Children(func() {
+			ui.Row(c).FillWidth().Gap(t.Space(3)).AlignItems(ui.Center).Children(func() {
+				components.Icon(c, lucide.Timer()).Size(20, 20).TextColor(t.Accent).Shrink(0)
+				ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
+					components.Text(c, "转换完成").FontSize(13).FontWeight(600).SingleLine()
+					components.Text(c, fmt.Sprintf("%d 秒后自动关闭窗口", a.countdown)).
+						FontSize(12).TextColor(t.Accent).SingleLine()
+				})
+				if components.Button(c, "取消自动关闭", components.ButtonSecondary).Clicked() {
+					a.cancelAutoClose()
+				}
+			})
+			components.Progress(c, float64(a.countdown)/closeCountdownSeconds).
+				FillWidth().Label("自动关闭倒计时")
+		})
 }
 
 // edgeTabs only renders on the edge page; the caller keeps the layout stable.
@@ -757,9 +787,10 @@ func (a *app) settingsPage(c *ui.Context) {
 			})
 
 			if runtime.GOOS == "windows" {
-				settingsCard(c, "快捷方式", func() {
+				settingsCard(c, "快捷方式与右键菜单", func() {
 					a.shortcutRow(c, shortcutStartMenu)
 					a.shortcutRow(c, shortcutDesktop)
+					a.contextMenuRow(c)
 				})
 			}
 
@@ -804,6 +835,19 @@ func (a *app) shortcutRow(c *ui.Context, k shortcutKind) {
 	a.settingRow(c, k.label(), hint, func() {
 		if components.Button(c, label, components.ButtonOutline).Clicked() {
 			a.toggleShortcut(k)
+		}
+	})
+}
+
+// contextMenuRow offers the app's right-click actions on image files.
+func (a *app) contextMenuRow(c *ui.Context) {
+	hint, label := "未启用", "添加"
+	if contextMenuRegistered() {
+		hint, label = "已启用", "移除"
+	}
+	a.settingRow(c, "图片右键菜单", hint, func() {
+		if components.Button(c, label, components.ButtonOutline).Clicked() {
+			a.toggleContextMenu()
 		}
 	})
 }

@@ -421,6 +421,31 @@ func TestQueuedLaunchKeepsPathsAndFormat(t *testing.T) {
 	}
 }
 
+func TestAutoCloseOnlyAfterAQuickBatchWithoutFailures(t *testing.T) {
+	a := newTestApp(t)
+	a.quickLaunch = true
+	if !a.shouldAutoClose(output.Convert) {
+		t.Fatal("a quick conversion should be allowed to close the window")
+	}
+	if a.shouldAutoClose(output.Matting) {
+		t.Fatal("only the quick convert batch may close the window")
+	}
+	a.runFailed = 1
+	if a.shouldAutoClose(output.Convert) {
+		t.Fatal("failures keep the window open")
+	}
+	a.runFailed = 0
+	a.pendingPaths = []string{`D:\pics\a.png`}
+	if a.shouldAutoClose(output.Convert) {
+		t.Fatal("a launch waiting in the queue keeps the window open")
+	}
+	a.pendingPaths = nil
+	a.quickLaunch = false
+	if a.shouldAutoClose(output.Convert) {
+		t.Fatal("a manually opened window stays open")
+	}
+}
+
 // TestRenderPreview writes a headless rendering for visual review. It is
 // opt-in so ordinary test runs never produce artifacts.
 func TestRenderPreview(t *testing.T) {

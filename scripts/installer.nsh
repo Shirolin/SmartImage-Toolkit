@@ -5,6 +5,26 @@
 
 !include "LogicLib.nsh"
 
+; The verbs are registered on the perceived image type and on every supported
+; extension. Explorer keeps only verbs that each selected file's class offers,
+; so the extension classes are what make a mixed selection (a PNG next to a
+; WebP) show the entries.
+!macro ctxVerb CLASS VERB LABEL ARGS
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\${CLASS}\shell\${VERB}" "" "${LABEL}"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\${CLASS}\shell\${VERB}" "Icon" "$INSTDIR\smartimage.exe,0"
+  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\${CLASS}\shell\${VERB}\command" "" '"$INSTDIR\smartimage.exe" ${ARGS} "%1"'
+!macroend
+
+!macro ctxClass CLASS
+  !insertmacro ctxVerb "${CLASS}" SmartImageOpen "用 SmartImage 打开" ""
+  !insertmacro ctxVerb "${CLASS}" SmartImageWebP "转成 WebP (SmartImage)" "--quick webp"
+!macroend
+
+!macro ctxClassRemove CLASS
+  DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\${CLASS}\shell\SmartImageOpen"
+  DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\${CLASS}\shell\SmartImageWebP"
+!macroend
+
 !macro customInstall
   ; The matting worker is built with MSVC and imports the 2015-2022 runtime.
   SetRegView 64
@@ -25,16 +45,29 @@
   ${EndIf}
   Delete "$INSTDIR\vc_redist.x64.exe"
 
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\image\shell\SmartImageOpen" "" "用 SmartImage 打开"
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\image\shell\SmartImageOpen" "Icon" "$INSTDIR\smartimage.exe,0"
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\image\shell\SmartImageOpen\command" "" '"$INSTDIR\smartimage.exe" "%1"'
-
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\image\shell\SmartImageWebP" "" "转成 WebP (SmartImage)"
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\image\shell\SmartImageWebP" "Icon" "$INSTDIR\smartimage.exe,0"
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\image\shell\SmartImageWebP\command" "" '"$INSTDIR\smartimage.exe" --quick webp "%1"'
+  !insertmacro ctxClass image
+  !insertmacro ctxClass .png
+  !insertmacro ctxClass .jpg
+  !insertmacro ctxClass .jpeg
+  !insertmacro ctxClass .jfif
+  !insertmacro ctxClass .webp
+  !insertmacro ctxClass .avif
+  !insertmacro ctxClass .gif
+  !insertmacro ctxClass .bmp
+  !insertmacro ctxClass .tif
+  !insertmacro ctxClass .tiff
 !macroend
 
 !macro customUnInstall
-  DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\image\shell\SmartImageOpen"
-  DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\image\shell\SmartImageWebP"
+  !insertmacro ctxClassRemove image
+  !insertmacro ctxClassRemove .png
+  !insertmacro ctxClassRemove .jpg
+  !insertmacro ctxClassRemove .jpeg
+  !insertmacro ctxClassRemove .jfif
+  !insertmacro ctxClassRemove .webp
+  !insertmacro ctxClassRemove .avif
+  !insertmacro ctxClassRemove .gif
+  !insertmacro ctxClassRemove .bmp
+  !insertmacro ctxClassRemove .tif
+  !insertmacro ctxClassRemove .tiff
 !macroend

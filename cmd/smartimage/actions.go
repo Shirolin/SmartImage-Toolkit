@@ -180,6 +180,7 @@ func (a *app) chooseFiles() {
 		if err != nil || len(paths) == 0 {
 			return
 		}
+		a.cancelAutoClose()
 		a.addTargets(paths, nil)
 	}()
 }
@@ -194,6 +195,7 @@ func (a *app) chooseFolder() {
 		if err != nil || len(paths) == 0 {
 			return
 		}
+		a.cancelAutoClose()
 		a.addTargets(paths, nil)
 	}()
 }
@@ -639,14 +641,21 @@ func (a *app) startRun(op output.Op, job ops.Job) {
 // startBatch owns the queue lifecycle shared by every operation. run does the
 // work for the paths and may use fewer workers than the concurrency setting.
 func (a *app) startBatch(op output.Op, run func(context.Context, []string, ops.Progress) []ops.Result) {
+	// Whatever a drain handed over has arrived; the batch owns the queue now.
+	a.draining = false
 	if a.busy {
 		a.chained = false
 		return
+	}
+	// Starting more work by hand means the user is still at the window.
+	if a.countdown > 0 {
+		a.cancelAutoClose()
 	}
 	targets := a.convertible(op)
 	if len(targets) == 0 {
 		a.chained = false
 		a.notice = "没有待处理的文件。"
+		a.maybeAutoClose(op)
 		return
 	}
 	if a.settings.Location == settings.CustomDir && strings.TrimSpace(a.settings.CustomDir) == "" {
@@ -694,6 +703,7 @@ func (a *app) startBatch(op output.Op, run func(context.Context, []string, ops.P
 			a.notice = ""
 			a.summarize(op, targets)
 			a.drainPending()
+			a.maybeAutoClose(op)
 		})
 	}()
 }

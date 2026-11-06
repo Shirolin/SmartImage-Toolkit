@@ -3,12 +3,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 // The shortcut is a .lnk written through the shell's IShellLink object, so it
@@ -175,4 +178,82 @@ func createShortcutAt(link, target string) error {
 		}
 		return nil
 	})
+}
+
+// The right-click actions live where the installer writes them, under the
+// shell's image association. The perceived type covers every image, while the
+// extension classes are needed for a mixed selection such as a PNG next to a
+// WebP: Explorer only keeps verbs that each selected file's class offers.
+var contextMenuClasses = []string{
+	"image",
+	".png", ".jpg", ".jpeg", ".jfif", ".webp", ".avif", ".gif", ".bmp", ".tif", ".tiff",
+}
+
+var contextMenuVerbs = []struct {
+	key, label, command string
+}{
+	{"SmartImageOpen", "用 SmartImage 打开", `"%s" "%%1"`},
+	{"SmartImageWebP", "转成 WebP (SmartImage)", `"%s" --quick webp "%%1"`},
+}
+
+func contextMenuKey(class, verb string) string {
+	return `Software\Classes\SystemFileAssociations\` + class + `\shell\` + verb
+}
+
+func contextMenuRegistered() bool {
+	for _, class := range contextMenuClasses {
+		for _, verb := range contextMenuVerbs {
+			k, err := registry.OpenKey(registry.CURRENT_USER,
+				contextMenuKey(class, verb.key)+`\command`, registry.QUERY_VALUE)
+			if err != nil {
+				return false
+			}
+			k.Close()
+		}
+	}
+	return true
+}
+
+func registerContextMenu(exe string) error {
+	for _, class := range contextMenuClasses {
+		for _, verb := range contextMenuVerbs {
+			path := contextMenuKey(class, verb.key)
+			k, _, err := registry.CreateKey(registry.CURRENT_USER, path, registry.SET_VALUE)
+			if err != nil {
+				return err
+			}
+			err = k.SetStringValue("", verb.label)
+			if err == nil {
+				err = k.SetStringValue("Icon", exe+",0")
+			}
+			k.Close()
+			if err != nil {
+				return err
+			}
+			cmd, _, err := registry.CreateKey(registry.CURRENT_USER, path+`\command`, registry.SET_VALUE)
+			if err != nil {
+				return err
+			}
+			err = cmd.SetStringValue("", fmt.Sprintf(verb.command, exe))
+			cmd.Close()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func unregisterContextMenu() error {
+	for _, class := range contextMenuClasses {
+		for _, verb := range contextMenuVerbs {
+			path := contextMenuKey(class, verb.key)
+			for _, key := range []string{path + `\command`, path} {
+				if err := registry.DeleteKey(registry.CURRENT_USER, key); err != nil && !errors.Is(err, registry.ErrNotExist) {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }

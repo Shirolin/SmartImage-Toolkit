@@ -208,6 +208,14 @@ type app struct {
 	runSaved                                  int64
 	runDir                                    string
 
+	// quickLaunch marks a window opened by a context-menu quick conversion,
+	// which closes itself once the batch succeeds. draining covers the gap
+	// between a batch ending and the queued launch it just handed off.
+	quickLaunch  bool
+	draining     bool
+	countdown    int
+	countdownGen int
+
 	gen      int
 	thumbSem chan struct{}
 }
@@ -323,7 +331,10 @@ func (a *app) start(l launch) {
 		Theme:        theme.Onevra,
 	})
 	a.win = a.shell.Window()
-	a.win.OnFileDrop(func(e *mygo.FileDropEvent) { a.addTargets(e.Paths, nil) })
+	a.win.OnFileDrop(func(e *mygo.FileDropEvent) {
+		a.cancelAutoClose()
+		a.addTargets(e.Paths, nil)
+	})
 	a.win.OnClose(func(e *mygo.CloseEvent) {
 		if !a.busy {
 			return
@@ -341,6 +352,7 @@ func (a *app) start(l launch) {
 	})
 	a.win.OnClosed(func() { mygo.App.Quit() })
 
+	a.quickLaunch = l.hasQuick
 	if l.hasQuick {
 		a.applyQuickFormat(l.quick)
 	}
@@ -359,6 +371,16 @@ func (a *app) secondInstance(args []string, _ string) {
 	if a.busy {
 		a.queueLaunch(l)
 		return
+	}
+	// Windows invokes a multi-select quick action once per file, and a fast
+	// conversion can finish before the next launch arrives. Such a launch
+	// continues the session: its summary adds up and the countdown restarts
+	// after the new batch. Any other launch means the user wants the window.
+	if l.hasQuick {
+		a.stopCountdown()
+		a.chained = true
+	} else {
+		a.cancelAutoClose()
 	}
 	a.win.Update(func() {
 		if l.hasQuick {
@@ -406,10 +428,15 @@ func (a *app) drainPending() {
 	// The follow-up conversion continues the same multi-select request, so
 	// its summary adds to the one already shown.
 	a.chained = hasQuick
+	a.draining = true
 	a.addTargets(paths, func() {
 		if hasQuick {
 			a.startConvert()
+			return
 		}
+		// Nothing runs after this, so the window may close itself now.
+		a.draining = false
+		a.maybeAutoClose(output.Convert)
 	})
 }
 

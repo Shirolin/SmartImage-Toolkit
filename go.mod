@@ -9,6 +9,7 @@ require (
 	github.com/gen2brain/jpegli v0.4.2
 	github.com/gen2brain/webp v0.6.4
 	github.com/oneo-me/onevra/source v0.2026.17
+	golang.org/x/sys v0.49.0
 )
 
 require (
@@ -17,7 +18,6 @@ require (
 	github.com/tetratelabs/wazero v1.12.0 // indirect
 	golang.org/x/image v0.47.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 )
 
