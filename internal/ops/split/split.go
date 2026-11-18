@@ -188,9 +188,12 @@ func Run(ctx context.Context, src string, cfg Config) ops.Result {
 			}
 		}
 		name := fmt.Sprintf("%s_r%02d_c%02d%s", base, t.Row+1, t.Col+1, outExt)
-		size, err := writeTile(filepath.Join(outDir, name), tile, format)
+		size, err := writeTile(ctx, filepath.Join(outDir, name), tile, format)
 		if err != nil {
 			_ = os.RemoveAll(outDir)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
+			}
 			return ops.Result{Status: ops.StatusError, File: src, Reason: fmt.Sprintf("写入切片 %s 失败: %v", name, err), InputSize: inputSize}
 		}
 		written += size
@@ -206,12 +209,12 @@ func Run(ctx context.Context, src string, cfg Config) ops.Result {
 	}
 }
 
-func writeTile(path string, img image.Image, format imageio.Format) (int64, error) {
+func writeTile(ctx context.Context, path string, img image.Image, format imageio.Format) (int64, error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return 0, err
 	}
-	if err := imageio.Encode(f, img, format); err != nil {
+	if err := imageio.EncodeContext(ctx, f, img, format); err != nil {
 		f.Close()
 		return 0, err
 	}

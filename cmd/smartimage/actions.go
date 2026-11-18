@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"math"
 	"os"
 	"os/exec"
@@ -42,8 +43,19 @@ func (a *app) addTargets(paths []string, done func([]string)) {
 	}
 	go func() {
 		res := discovery.Discover(paths, discovery.Options{Supported: imageio.IsSupported})
+		items := make([]*fileItem, 0, len(res.Files))
+		for _, path := range res.Files {
+			info, err := os.Stat(path)
+			if err == nil && !info.IsDir() {
+				items = append(items, &fileItem{
+					path: path,
+					name: filepath.Base(path),
+					size: info.Size(),
+				})
+			}
+		}
 		a.update(func() {
-			a.addFiles(res.Files)
+			a.addFiles(items)
 			a.setDiscoveryNotice(res)
 			if done != nil {
 				done(res.Files)
@@ -65,51 +77,54 @@ func (a *app) setDiscoveryNotice(res discovery.Result) {
 	}
 }
 
-func (a *app) addFiles(paths []string) {
+func (a *app) addFiles(items []*fileItem) {
 	added := 0
-	for _, path := range paths {
-		key := discovery.PathKey(path)
+	for _, item := range items {
+		key := discovery.PathKey(item.path)
 		if _, exists := a.index[key]; exists {
 			continue
 		}
-		info, err := os.Stat(path)
-		if err != nil || info.IsDir() {
-			continue
-		}
-		item := &fileItem{
-			path: path,
-			name: filepath.Base(path),
-			size: info.Size(),
-		}
 		a.files = append(a.files, item)
 		a.index[key] = item
-		a.loadThumb(item, a.gen)
 		added++
 	}
-	if added == 0 && len(paths) > 0 {
+	if added == 0 && len(items) > 0 {
 		a.notice = "这些文件已经在列表中。"
 	}
 }
 
-func (a *app) loadThumb(item *fileItem, gen int) {
-	go func() {
-		a.thumbSem <- struct{}{}
-		defer func() { <-a.thumbSem }()
+func (a *app) loadVisibleThumbs() {
+	if a.win == nil || a.busy {
+		return
+	}
+	first, last := a.list.Visible()
+	for index := first; index <= last && index < len(a.files) && a.thumbsRunning < 2; index++ {
+		item := a.files[index]
+		if item.thumbRequested {
+			continue
+		}
+		item.thumbRequested = true
+		a.thumbsRunning++
+		go a.loadThumb(item)
+	}
+}
 
-		img, err := imageio.DecodeFile(item.path)
-		if err != nil {
+func (a *app) loadThumb(item *fileItem) {
+	img, err := imageio.DecodeFile(item.path)
+	var thumb *image.NRGBA
+	var width, height int
+	if err == nil {
+		thumb = imaging.Fit(img, 96, 96, imaging.Lanczos)
+		width, height = img.Bounds().Dx(), img.Bounds().Dy()
+	}
+	a.update(func() {
+		a.thumbsRunning--
+		if thumb == nil || a.index[discovery.PathKey(item.path)] != item {
 			return
 		}
-		thumb := imaging.Fit(img, 96, 96, imaging.Lanczos)
-		w, h := img.Bounds().Dx(), img.Bounds().Dy()
-		a.update(func() {
-			if gen != a.gen || a.index[discovery.PathKey(item.path)] != item {
-				return
-			}
-			item.thumb = ui.NewBitmap(thumb)
-			item.width, item.height = w, h
-		})
-	}()
+		item.thumb = ui.NewBitmap(thumb)
+		item.width, item.height = width, height
+	})
 }
 
 func (a *app) clearFiles() {

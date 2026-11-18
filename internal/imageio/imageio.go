@@ -6,6 +6,7 @@
 package imageio
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -166,14 +167,40 @@ func Decode(r io.Reader, ext string) (image.Image, error) {
 	}
 }
 
+const largeWebPPixels = 8_000_000
+
+var largeWebPEncodes = make(chan struct{}, 3)
+
 // Encode writes img to w in format f.
+func Encode(w io.Writer, img image.Image, f Format) error {
+	return EncodeContext(context.Background(), w, img, f)
+}
+
+// EncodeContext writes img to w in format f and allows canceling queued encodes.
 //
 // JPEG has no alpha channel, so transparent pixels are composited onto white
 // instead of being reduced to a black background.
-func Encode(w io.Writer, img image.Image, f Format) error {
+func EncodeContext(ctx context.Context, w io.Writer, img image.Image, f Format) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	switch f {
 	case WebP:
-		return webp.Encode(w, img, webp.Options{Quality: 80, Method: 6, Exact: true})
+		method := webp.DefaultMethod
+		bounds := img.Bounds()
+		if int64(bounds.Dx())*int64(bounds.Dy()) >= largeWebPPixels && webp.Dynamic() != nil {
+			method = 2
+			select {
+			case largeWebPEncodes <- struct{}{}:
+				defer func() { <-largeWebPEncodes }()
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return webp.Encode(w, img, webp.Options{Quality: 80, Method: method, Exact: true})
 	case PNG:
 		enc := png.Encoder{CompressionLevel: png.BestCompression}
 		return enc.Encode(w, img)

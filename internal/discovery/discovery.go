@@ -36,14 +36,20 @@ type Options struct {
 }
 
 func PathKey(path string) string {
-	if abs, err := filepath.Abs(path); err == nil {
-		path = abs
-	}
-	path = filepath.Clean(path)
+	path = absolutePath(path)
 	if runtime.GOOS == "windows" {
 		path = strings.ToLower(path)
 	}
 	return path
+}
+
+func absolutePath(path string) string {
+	if !filepath.IsAbs(path) {
+		if abs, err := filepath.Abs(path); err == nil {
+			return abs
+		}
+	}
+	return filepath.Clean(path)
 }
 
 // Discover expands targets into absolute image paths.
@@ -68,12 +74,12 @@ func Discover(targets []string, opts Options) Result {
 	}
 
 	add := func(path string) {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			abs = path
+		abs := absolutePath(path)
+		if !opts.Supported(abs) {
+			return
 		}
 		key := PathKey(abs)
-		if opts.Supported(abs) && !seen[key] {
+		if !seen[key] {
 			seen[key] = true
 			res.Files = append(res.Files, abs)
 		}
@@ -95,7 +101,8 @@ func Discover(targets []string, opts Options) Result {
 			continue
 		}
 
-		err = filepath.WalkDir(target, func(path string, d fs.DirEntry, err error) error {
+		root := absolutePath(target)
+		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				warn(Warning{Kind: "error", Path: path, Message: err.Error()})
 				return nil
@@ -108,10 +115,10 @@ func Discover(targets []string, opts Options) Result {
 				return nil
 			}
 			if d.IsDir() {
-				if opts.MaxDepth < 0 || path == target {
+				if opts.MaxDepth < 0 || path == root {
 					return nil
 				}
-				relative, err := filepath.Rel(target, path)
+				relative, err := filepath.Rel(root, path)
 				if err == nil && 1+strings.Count(relative, string(os.PathSeparator)) >= opts.MaxDepth {
 					n := countSupported(path, opts.Supported)
 					warn(Warning{

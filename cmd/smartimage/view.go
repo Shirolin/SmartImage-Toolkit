@@ -541,6 +541,7 @@ func (a *app) queuePanel(c *ui.Context) {
 			ui.Column(c).Grow(1).MinHeight(0).Clip().Children(func() {
 				components.List(c, &a.list, len(a.files), func(i int) { a.fileRow(c, i, op) })
 			})
+			a.loadVisibleThumbs()
 			ui.Divider(c)
 			a.actionBar(c, op)
 		})

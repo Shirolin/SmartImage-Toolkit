@@ -103,8 +103,9 @@ type fileItem struct {
 	name string
 	size int64
 
-	width, height int
-	thumb         *ui.Bitmap
+	width, height  int
+	thumb          *ui.Bitmap
+	thumbRequested bool
 
 	results map[output.Op]opResult
 }
@@ -214,8 +215,8 @@ type app struct {
 	countdown    int
 	countdownGen int
 
-	gen      int
-	thumbSem chan struct{}
+	gen           int
+	thumbsRunning int
 }
 
 func main() {
@@ -281,7 +282,6 @@ func main() {
 		index:           make(map[string]*fileItem),
 		summaries:       make(map[output.Op]string),
 		outputDirs:      make(map[output.Op]string),
-		thumbSem:        make(chan struct{}, 2),
 	}
 	a.list.Key = func(i int) any {
 		if i < 0 || i >= len(a.files) {

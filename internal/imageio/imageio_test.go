@@ -2,12 +2,38 @@ package imageio
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
+	"io"
 	"testing"
+	"time"
+
+	"github.com/gen2brain/webp"
 )
+
+func TestCancelQueuedLargeWebPEncode(t *testing.T) {
+	if webp.Dynamic() == nil {
+		t.Skip("native WebP encoder does not use the fallback queue")
+	}
+	for range cap(largeWebPEncodes) {
+		largeWebPEncodes <- struct{}{}
+	}
+	defer func() {
+		for range cap(largeWebPEncodes) {
+			<-largeWebPEncodes
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	img := image.NewGray(image.Rect(0, 0, 4000, 3000))
+	if err := EncodeContext(ctx, io.Discard, img, WebP); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("EncodeContext returned %v, want deadline exceeded", err)
+	}
+}
 
 // testImage is a small gradient with a transparent corner, so alpha fidelity
 // is exercised alongside color fidelity.
