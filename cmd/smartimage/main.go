@@ -15,6 +15,7 @@ import (
 	"github.com/oneo-me/onevra/source/shells/sidebar"
 	"github.com/oneo-me/onevra/source/theme"
 
+	"github.com/Shirolin/SmartImage-Toolkit/internal/discovery"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/imageio"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/center"
@@ -196,14 +197,11 @@ type app struct {
 	outputDirs map[output.Op]string
 	notice     string
 
-	// pending holds launches that arrived during a batch; the batch end
-	// drains them so multi-select right-click actions are never dropped.
-	pendingPaths    []string
-	pendingQuick    imageio.Format
-	hasPendingQuick bool
+	pending []launch
 
 	// chained merges the summaries of a queue drained from pending launches.
 	chained                                   bool
+	quickSummaryFormat                        imageio.Format
 	runOK, runSkipped, runFailed, runCanceled int
 	runSaved                                  int64
 	runDir                                    string
@@ -221,6 +219,15 @@ type app struct {
 }
 
 func main() {
+	if len(os.Args) == 2 {
+		switch os.Args[1] {
+		case "--register-context-menu", "--unregister-context-menu":
+			if err := setContextMenu(os.Args[1] == "--register-context-menu"); err != nil {
+				log.Fatal(err)
+			}
+			return
+		}
+	}
 	mygo.App.SetName("SmartImage")
 	if !mygo.App.RequestSingleInstanceLock() {
 		return
@@ -353,90 +360,77 @@ func (a *app) start(l launch) {
 	a.win.OnClosed(func() { mygo.App.Quit() })
 
 	a.quickLaunch = l.hasQuick
-	if l.hasQuick {
-		a.applyQuickFormat(l.quick)
-	}
-	a.addTargets(l.paths, func() {
-		if l.hasQuick {
-			a.startConvert()
-		}
-	})
+	a.submitLaunch(l)
 }
 
 func (a *app) secondInstance(args []string, _ string) {
-	l := parseLaunch(args)
 	if a.win == nil {
 		return
 	}
-	if a.busy {
-		a.queueLaunch(l)
-		return
-	}
-	// Windows invokes a multi-select quick action once per file, and a fast
-	// conversion can finish before the next launch arrives. Such a launch
-	// continues the session: its summary adds up and the countdown restarts
-	// after the new batch. Any other launch means the user wants the window.
+	a.submitLaunch(parseLaunch(args))
+	a.win.Show()
+	a.win.Focus()
+	a.win.Invalidate()
+}
+
+func (a *app) submitLaunch(l launch) {
 	if l.hasQuick {
 		a.stopCountdown()
-		a.chained = true
 	} else {
 		a.cancelAutoClose()
 	}
-	a.win.Update(func() {
-		if l.hasQuick {
-			a.applyQuickFormat(l.quick)
-		}
-	})
-	a.addTargets(l.paths, func() {
-		if l.hasQuick {
-			a.startConvert()
-		}
-		a.win.Show()
-		a.win.Focus()
-	})
+	if len(l.paths) == 0 {
+		return
+	}
+	if a.busy || a.draining {
+		a.notice = "当前任务结束后处理新的请求。"
+	}
+	a.pending = append(a.pending, l)
+	a.drainPending()
 }
 
-// queueLaunch remembers a launch that arrived while a batch was running.
-// Windows invokes a context-menu command once per selected file, so a
-// multi-select quick conversion becomes several second instances.
-func (a *app) queueLaunch(l launch) {
-	a.pendingPaths = append(a.pendingPaths, l.paths...)
-	if l.hasQuick {
-		a.pendingQuick, a.hasPendingQuick = l.quick, true
-	}
-	a.notice = "当前任务结束后处理新的请求。"
-	if a.win != nil {
-		a.win.Invalidate()
-	}
-}
-
-// drainPending starts whatever launch was queued during the batch. It runs
-// inside the batch-finishing update, when busy is already false.
 func (a *app) drainPending() {
-	paths := a.pendingPaths
-	quick, hasQuick := a.pendingQuick, a.hasPendingQuick
-	a.pendingPaths, a.hasPendingQuick = nil, false
-	if len(paths) == 0 && !hasQuick {
+	if a.busy || a.draining || len(a.pending) == 0 {
 		return
 	}
-	if hasQuick {
-		a.applyQuickFormat(quick)
-	}
-	if len(paths) == 0 {
-		return
-	}
-	// The follow-up conversion continues the same multi-select request, so
-	// its summary adds to the one already shown.
-	a.chained = hasQuick
-	a.draining = true
-	a.addTargets(paths, func() {
-		if hasQuick {
-			a.startConvert()
-			return
+	request := a.pending[0]
+	count := 1
+	for count < len(a.pending) {
+		next := a.pending[count]
+		if next.hasQuick != request.hasQuick || next.quick != request.quick {
+			break
 		}
-		// Nothing runs after this, so the window may close itself now.
+		request.paths = append(request.paths, next.paths...)
+		count++
+	}
+	clear(a.pending[:count])
+	a.pending = a.pending[count:]
+	a.draining = true
+	a.addTargets(request.paths, func(paths []string) {
 		a.draining = false
-		a.maybeAutoClose(output.Convert)
+		if request.hasQuick && len(paths) != 0 {
+			a.applyQuickFormat(request.quick)
+			var targets []*fileItem
+			for _, path := range paths {
+				if item := a.index[discovery.PathKey(path)]; item != nil && item.needsRun(output.Convert) {
+					targets = append(targets, item)
+				}
+			}
+			if len(targets) > 0 {
+				a.chained = a.quickSummaryFormat == request.quick
+				a.startConvert(targets)
+				if a.busy {
+					a.quickSummaryFormat = request.quick
+					return
+				}
+				a.chained = false
+				a.cancelAutoClose()
+			}
+			a.maybeAutoClose(output.Convert)
+		} else if request.hasQuick {
+			a.cancelAutoClose()
+		}
+		a.drainPending()
 	})
 }
 

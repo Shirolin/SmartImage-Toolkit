@@ -31,24 +31,12 @@ import (
 	"github.com/Shirolin/SmartImage-Toolkit/internal/settings"
 )
 
-func fileKey(path string) string {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		abs = path
-	}
-	abs = filepath.Clean(abs)
-	if runtime.GOOS == "windows" {
-		return strings.ToLower(abs)
-	}
-	return abs
-}
-
 // addTargets expands dropped paths and files in the background, then merges
 // them into the queue on the UI thread. done runs after the merge.
-func (a *app) addTargets(paths []string, done func()) {
+func (a *app) addTargets(paths []string, done func([]string)) {
 	if len(paths) == 0 {
 		if done != nil {
-			done()
+			done(nil)
 		}
 		return
 	}
@@ -58,7 +46,7 @@ func (a *app) addTargets(paths []string, done func()) {
 			a.addFiles(res.Files)
 			a.setDiscoveryNotice(res)
 			if done != nil {
-				done()
+				done(res.Files)
 			}
 		})
 	}()
@@ -71,7 +59,7 @@ func (a *app) setDiscoveryNotice(res discovery.Result) {
 	case len(res.Files) == 0:
 		a.notice = fmt.Sprintf("没有找到可处理的图片，有 %d 个路径无法读取。", len(res.Warnings))
 	case res.Truncated > 0:
-		a.notice = fmt.Sprintf("有 %d 个文件夹层级过深，已跳过。", res.Truncated)
+		a.notice = fmt.Sprintf("有 %d 张图片位于过深的文件夹，已跳过。", res.Truncated)
 	case len(res.Warnings) > 0:
 		a.notice = fmt.Sprintf("有 %d 个路径无法读取，已跳过。", len(res.Warnings))
 	}
@@ -80,7 +68,7 @@ func (a *app) setDiscoveryNotice(res discovery.Result) {
 func (a *app) addFiles(paths []string) {
 	added := 0
 	for _, path := range paths {
-		key := fileKey(path)
+		key := discovery.PathKey(path)
 		if _, exists := a.index[key]; exists {
 			continue
 		}
@@ -115,7 +103,7 @@ func (a *app) loadThumb(item *fileItem, gen int) {
 		thumb := imaging.Fit(img, 96, 96, imaging.Lanczos)
 		w, h := img.Bounds().Dx(), img.Bounds().Dy()
 		a.update(func() {
-			if gen != a.gen || a.index[fileKey(item.path)] != item {
+			if gen != a.gen || a.index[discovery.PathKey(item.path)] != item {
 				return
 			}
 			item.thumb = ui.NewBitmap(thumb)
@@ -153,7 +141,7 @@ func (a *app) removeFile(f *fileItem) {
 			continue
 		}
 		a.files = append(a.files[:i], a.files[i+1:]...)
-		delete(a.index, fileKey(f.path))
+		delete(a.index, discovery.PathKey(f.path))
 		if f.thumb != nil {
 			f.thumb.ReleasePixels()
 		}
@@ -285,12 +273,20 @@ func (a *app) resetOp(op output.Op) {
 func (a *app) convertible(op output.Op) []*fileItem {
 	var out []*fileItem
 	for _, f := range a.files {
-		switch f.result(op).status {
-		case statusQueued, statusError, statusCanceled:
+		if f.needsRun(op) {
 			out = append(out, f)
 		}
 	}
 	return out
+}
+
+func (f *fileItem) needsRun(op output.Op) bool {
+	switch f.result(op).status {
+	case statusQueued, statusError, statusCanceled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *app) failedCount(op output.Op) int {
@@ -398,6 +394,11 @@ func (a *app) padError() error {
 }
 
 func (a *app) startCurrent() {
+	if a.busy || a.draining {
+		return
+	}
+	a.cancelAutoClose()
+	a.quickSummaryFormat = ""
 	switch a.currentOp() {
 	case output.Resize:
 		a.startResize()
@@ -414,27 +415,27 @@ func (a *app) startCurrent() {
 	case output.Matting:
 		a.startMatting()
 	default:
-		a.startConvert()
+		a.startConvert(a.convertible(output.Convert))
 	}
 }
 
-func (a *app) startConvert() {
+func (a *app) startConvert(targets []*fileItem) {
 	cfg := transcode.Config{Format: a.format, Policy: a.policy()}
-	a.startRun(output.Convert, func(ctx context.Context, src string) ops.Result {
+	a.startRun(output.Convert, targets, func(ctx context.Context, src string) ops.Result {
 		return transcode.Run(ctx, src, cfg)
 	})
 }
 
 func (a *app) startResize() {
 	cfg := a.resizeConfig()
-	a.startRun(output.Resize, func(ctx context.Context, src string) ops.Result {
+	a.startRun(output.Resize, a.convertible(output.Resize), func(ctx context.Context, src string) ops.Result {
 		return resize.Run(ctx, src, cfg)
 	})
 }
 
 func (a *app) startTrim() {
 	cfg := a.trimConfig()
-	a.startRun(output.Trim, func(ctx context.Context, src string) ops.Result {
+	a.startRun(output.Trim, a.convertible(output.Trim), func(ctx context.Context, src string) ops.Result {
 		return trim.Run(ctx, src, cfg)
 	})
 }
@@ -445,14 +446,14 @@ func (a *app) startCrop() {
 		return
 	}
 	cfg := a.cropConfig()
-	a.startRun(output.Crop, func(ctx context.Context, src string) ops.Result {
+	a.startRun(output.Crop, a.convertible(output.Crop), func(ctx context.Context, src string) ops.Result {
 		return crop.Run(ctx, src, cfg)
 	})
 }
 
 func (a *app) startCenter() {
 	cfg := a.centerConfig()
-	a.startRun(output.Center, func(ctx context.Context, src string) ops.Result {
+	a.startRun(output.Center, a.convertible(output.Center), func(ctx context.Context, src string) ops.Result {
 		return center.Run(ctx, src, cfg)
 	})
 }
@@ -463,7 +464,7 @@ func (a *app) startPad() {
 		return
 	}
 	cfg := a.padConfig()
-	a.startRun(output.Pad, func(ctx context.Context, src string) ops.Result {
+	a.startRun(output.Pad, a.convertible(output.Pad), func(ctx context.Context, src string) ops.Result {
 		return padaspect.Run(ctx, src, cfg)
 	})
 }
@@ -482,8 +483,7 @@ func (a *app) splitConfig(grid split.Grid) split.Config {
 	}
 }
 
-// startSplit cuts the image currently open in the editor. The split page is
-// single-image by design, so it bypasses the queue-wide startRun.
+// startSplit cuts the image currently open in the editor.
 func (a *app) startSplit() {
 	if a.busy || a.split == nil || a.split.item == nil {
 		return
@@ -493,41 +493,10 @@ func (a *app) startSplit() {
 		a.notice = err.Error()
 		return
 	}
-	if a.settings.Location == settings.CustomDir && strings.TrimSpace(a.settings.CustomDir) == "" {
-		a.notice = "请先选择输出目录。"
-		a.chooseOutputDir(nil)
-		return
-	}
-	item := a.split.item
 	cfg := a.splitConfig(grid)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	a.cancel = cancel
-	a.busy = true
-	a.notice = ""
-	a.done, a.total = 0, 1
-	delete(a.summaries, output.Split)
-	delete(a.outputDirs, output.Split)
-	item.setResult(output.Split, opResult{status: statusRunning})
-
-	go func() {
-		r := split.Run(ctx, item.path, cfg)
-		a.update(func() {
-			applyResult(item, output.Split, r)
-			a.busy = false
-			a.cancel = nil
-			a.done = 1
-			a.summarize(output.Split, []*fileItem{item})
-			// The split result is a folder of tiles; "open output" should land
-			// in that folder, not in the directory that holds it.
-			if r.Output != "" {
-				a.outputDirs[output.Split] = r.Output
-			}
-			if r.Status == ops.StatusCanceled {
-				a.summaries[output.Split] = "已取消切割。"
-			}
-		})
-	}()
+	a.startRun(output.Split, []*fileItem{a.split.item}, func(ctx context.Context, src string) ops.Result {
+		return split.Run(ctx, src, cfg)
+	})
 }
 
 // Matting model presets. The files are resolved next to the executable.
@@ -613,7 +582,7 @@ func (a *app) startMatting() {
 		Format:     a.mattingFormat,
 		Policy:     a.policy(),
 	}
-	a.startBatch(output.Matting, func(ctx context.Context, paths []string, progress ops.Progress) []ops.Result {
+	a.startBatch(output.Matting, a.convertible(output.Matting), func(ctx context.Context, paths []string, progress ops.Progress) []ops.Result {
 		// One engine, one thread pool, one image at a time keeps memory flat.
 		return matting.RunAll(ctx, paths, cfg, progress)
 	})
@@ -632,30 +601,21 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func (a *app) startRun(op output.Op, job ops.Job) {
-	a.startBatch(op, func(ctx context.Context, paths []string, progress ops.Progress) []ops.Result {
-		return ops.RunAll(ctx, paths, a.settings.Concurrency, job, progress)
+func (a *app) startRun(op output.Op, targets []*fileItem, job ops.Job) {
+	workers := min(a.settings.Concurrency, len(targets))
+	a.startBatch(op, targets, func(ctx context.Context, paths []string, progress ops.Progress) []ops.Result {
+		return ops.RunAll(ctx, paths, workers, job, progress)
 	})
 }
 
 // startBatch owns the queue lifecycle shared by every operation. run does the
 // work for the paths and may use fewer workers than the concurrency setting.
-func (a *app) startBatch(op output.Op, run func(context.Context, []string, ops.Progress) []ops.Result) {
-	// Whatever a drain handed over has arrived; the batch owns the queue now.
-	a.draining = false
-	if a.busy {
-		a.chained = false
+func (a *app) startBatch(op output.Op, targets []*fileItem, run func(context.Context, []string, ops.Progress) []ops.Result) {
+	if a.busy || a.draining {
 		return
 	}
-	// Starting more work by hand means the user is still at the window.
-	if a.countdown > 0 {
-		a.cancelAutoClose()
-	}
-	targets := a.convertible(op)
 	if len(targets) == 0 {
-		a.chained = false
 		a.notice = "没有待处理的文件。"
-		a.maybeAutoClose(op)
 		return
 	}
 	if a.settings.Location == settings.CustomDir && strings.TrimSpace(a.settings.CustomDir) == "" {
@@ -677,23 +637,24 @@ func (a *app) startBatch(op output.Op, run func(context.Context, []string, ops.P
 	targetSet := make(map[string]*fileItem, len(targets))
 	for i, f := range targets {
 		paths[i] = f.path
-		targetSet[fileKey(f.path)] = f
+		targetSet[discovery.PathKey(f.path)] = f
 		f.setResult(op, opResult{status: statusRunning})
 	}
 
 	go func() {
+		defer cancel()
 		results := run(ctx, paths,
 			func(done, total int, r ops.Result) {
 				a.update(func() {
-					if f := targetSet[fileKey(r.File)]; f != nil {
+					if f := targetSet[discovery.PathKey(r.File)]; f != nil {
 						applyResult(f, op, r)
 					}
-					a.done = done
+					a.done = max(a.done, done)
 				})
 			})
 		a.update(func() {
 			for _, r := range results {
-				if f := targetSet[fileKey(r.File)]; f != nil {
+				if f := targetSet[discovery.PathKey(r.File)]; f != nil {
 					applyResult(f, op, r)
 				}
 			}
@@ -702,6 +663,9 @@ func (a *app) startBatch(op output.Op, run func(context.Context, []string, ops.P
 			a.done = len(results)
 			a.notice = ""
 			a.summarize(op, targets)
+			if op == output.Convert && (a.runFailed != 0 || a.runCanceled != 0) {
+				a.cancelAutoClose()
+			}
 			a.drainPending()
 			a.maybeAutoClose(op)
 		})
@@ -761,7 +725,10 @@ func (a *app) summarize(op output.Op, targets []*fileItem) {
 			ok++
 			saved += f.size - r.outputSize
 			if dir == "" && r.output != "" {
-				dir = filepath.Dir(r.output)
+				dir = r.output
+				if op != output.Split {
+					dir = filepath.Dir(dir)
+				}
 			}
 		case statusSkipped:
 			skipped++
@@ -792,7 +759,9 @@ func (a *app) summarize(op output.Op, targets []*fileItem) {
 	if canceled > 0 {
 		parts = append(parts, fmt.Sprintf("取消 %d 个", canceled))
 	}
-	if len(parts) == 0 {
+	if op == output.Split && canceled > 0 {
+		a.summaries[op] = "已取消切割。"
+	} else if len(parts) == 0 {
 		a.summaries[op] = "任务已结束。"
 	} else {
 		a.summaries[op] = strings.Join(parts, " · ")

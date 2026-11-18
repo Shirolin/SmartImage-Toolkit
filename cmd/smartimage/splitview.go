@@ -707,7 +707,7 @@ func (a *app) splitActionBar(c *ui.Context) {
 				label = fmt.Sprintf("开始切割 (%d 片)", len(g.Tiles()))
 			}
 			if components.Button(c, label, components.ButtonPrimary).Disabled(disabled).Clicked() {
-				a.startSplit()
+				a.startCurrent()
 			}
 		})
 	})

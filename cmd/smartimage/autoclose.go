@@ -17,7 +17,7 @@ const closeCountdownSeconds = 3
 // stays readable.
 func (a *app) shouldAutoClose(op output.Op) bool {
 	return op == output.Convert && a.quickLaunch && !a.busy && !a.draining &&
-		len(a.pendingPaths) == 0 && a.runFailed == 0 && a.runCanceled == 0
+		len(a.pending) == 0 && a.runFailed == 0 && a.runCanceled == 0
 }
 
 // maybeAutoClose starts the countdown when the finished batch qualifies.

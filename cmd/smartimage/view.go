@@ -842,12 +842,13 @@ func (a *app) shortcutRow(c *ui.Context, k shortcutKind) {
 // contextMenuRow offers the app's right-click actions on image files.
 func (a *app) contextMenuRow(c *ui.Context) {
 	hint, label := "未启用", "添加"
-	if contextMenuRegistered() {
+	registered := contextMenuRegistered()
+	if registered {
 		hint, label = "已启用", "移除"
 	}
 	a.settingRow(c, "图片右键菜单", hint, func() {
 		if components.Button(c, label, components.ButtonOutline).Clicked() {
-			a.toggleContextMenu()
+			a.toggleContextMenu(registered)
 		}
 	})
 }

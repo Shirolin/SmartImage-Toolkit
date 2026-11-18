@@ -14,9 +14,7 @@ import (
 	"image"
 	"image/png"
 	"io"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -244,53 +242,21 @@ func Run(ctx context.Context, src string, cfg Config) ops.Result {
 
 // RunWith processes one file through an existing engine.
 func RunWith(ctx context.Context, engine *Engine, src string, cfg Config) ops.Result {
-	src = filepath.Clean(src)
-	srcExt := imageio.NormalizeExt(filepath.Ext(src))
-
-	var inputSize int64
-	if info, err := os.Stat(src); err == nil {
-		inputSize = info.Size()
-	}
-	format, note, err := targetFormat(cfg.Format, srcExt)
+	source := pipeline.ReadSource(src)
+	format, note, err := targetFormat(cfg.Format, source.Extension())
 	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
+		return source.Failed(err)
 	}
-	if err := ctx.Err(); err != nil {
-		return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
-	}
-	img, err := imageio.DecodeFile(src)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: fmt.Sprintf("图片文件解析失败: %v", err), InputSize: inputSize}
-	}
-
-	result, err := engine.Process(ctx, img)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
+	return source.Run(ctx, output.Matting, cfg.Policy, format, func(img image.Image) (image.Image, string, error) {
+		result, err := engine.Process(ctx, img)
+		if err != nil {
+			return nil, "", err
 		}
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	if cfg.Feather > 0 {
-		featherAlpha(result, cfg.Feather)
-	}
-
-	dir, base, outExt, err := cfg.Policy.Target(src, format.Ext(), output.Matting)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	out, outSize, err := pipeline.Emit(ctx, dir, base, outExt, result, format)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
+		if cfg.Feather > 0 {
+			featherAlpha(result, cfg.Feather)
 		}
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	b := result.Bounds()
-	return ops.Result{
-		Status: ops.StatusSuccess, File: src, Output: out,
-		Reason: note, InputSize: inputSize, OutputSize: outSize,
-		Width: b.Dx(), Height: b.Dy(),
-	}
+		return result, note, nil
+	})
 }
 
 // RunAll processes paths through one engine, sequentially: the model and its

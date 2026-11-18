@@ -5,13 +5,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 
+	"github.com/Shirolin/SmartImage-Toolkit/internal/discovery"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/imageio"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/transcode"
 )
@@ -65,48 +66,13 @@ func describe(r transcode.Result) string {
 	}
 }
 
-// discover expands files and directories into a deduplicated, sorted list of
-// supported images. Directory walks do not follow symlinks.
 func discover(targets []string) ([]string, error) {
-	seen := make(map[string]bool)
-	var files []string
-	add := func(path string) {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			abs = path
-		}
-		if imageio.IsSupported(abs) && !seen[abs] {
-			seen[abs] = true
-			files = append(files, abs)
+	result := discovery.Discover(targets, discovery.Options{Supported: imageio.IsSupported, MaxDepth: -1})
+	for _, warning := range result.Warnings {
+		if warning.Kind == "inaccessible" {
+			return nil, errors.New(warning.Message)
 		}
 	}
-
-	for _, target := range targets {
-		info, err := os.Stat(target)
-		if err != nil {
-			return nil, err
-		}
-		if !info.IsDir() {
-			add(target)
-			continue
-		}
-		err = filepath.WalkDir(target, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return nil // unreadable entries are skipped, as in the Node implementation
-			}
-			if d.Type()&fs.ModeSymlink != 0 {
-				return nil
-			}
-			if !d.IsDir() {
-				add(path)
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	sort.Strings(files)
-	return files, nil
+	sort.Strings(result.Files)
+	return result.Files, nil
 }

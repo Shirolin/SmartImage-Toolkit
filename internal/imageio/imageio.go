@@ -131,6 +131,13 @@ func PreserveFormat(srcExt string) Format {
 	return PNG
 }
 
+func OutputFormat(choice, srcExt string) (Format, error) {
+	if choice == "" || choice == "original" {
+		return PreserveFormat(srcExt), nil
+	}
+	return ParseFormat(choice)
+}
+
 // DecodeFile opens path and decodes it in display orientation.
 func DecodeFile(path string) (image.Image, error) {
 	f, err := os.Open(path)

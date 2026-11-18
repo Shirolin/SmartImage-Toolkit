@@ -406,18 +406,18 @@ func TestParseLaunch(t *testing.T) {
 func TestQueuedLaunchKeepsPathsAndFormat(t *testing.T) {
 	a := newTestApp(t)
 	a.busy = true
-	a.page = pageResize
-	a.queueLaunch(launch{paths: []string{`D:\pics\a.png`}, quick: imageio.PNG, hasQuick: true})
-	if len(a.pendingPaths) != 1 || !a.hasPendingQuick || a.pendingQuick != imageio.PNG {
-		t.Fatalf("queued = %v/%v/%v, want one path and png", a.pendingPaths, a.hasPendingQuick, a.pendingQuick)
+	a.quickLaunch = true
+	a.submitLaunch(parseLaunch([]string{"--quick", "png", "first.jpg"}))
+	a.submitLaunch(parseLaunch([]string{"second.jpg"}))
+	a.submitLaunch(parseLaunch([]string{"--quick", "webp", "third.jpg"}))
+	if len(a.pending) != 3 ||
+		a.pending[0].quick != imageio.PNG || a.pending[0].paths[0] != "first.jpg" ||
+		a.pending[1].hasQuick || a.pending[1].paths[0] != "second.jpg" ||
+		a.pending[2].quick != imageio.WebP || a.pending[2].paths[0] != "third.jpg" {
+		t.Fatalf("queued = %+v, want the original requests in order", a.pending)
 	}
-
-	// The paths need real files, so drain the format alone.
-	a.busy = false
-	a.pendingPaths = nil
-	a.drainPending()
-	if a.page != pageConvert || a.format != imageio.PNG || a.hasPendingQuick {
-		t.Fatalf("after drain: page=%v format=%v pending=%v", a.page, a.format, a.hasPendingQuick)
+	if a.quickLaunch {
+		t.Fatal("an ordinary open request should keep the window open")
 	}
 }
 
@@ -435,11 +435,11 @@ func TestAutoCloseOnlyAfterAQuickBatchWithoutFailures(t *testing.T) {
 		t.Fatal("failures keep the window open")
 	}
 	a.runFailed = 0
-	a.pendingPaths = []string{`D:\pics\a.png`}
+	a.pending = []launch{{paths: []string{`D:\pics\a.png`}}}
 	if a.shouldAutoClose(output.Convert) {
 		t.Fatal("a launch waiting in the queue keeps the window open")
 	}
-	a.pendingPaths = nil
+	a.pending = nil
 	a.quickLaunch = false
 	if a.shouldAutoClose(output.Convert) {
 		t.Fatal("a manually opened window stays open")

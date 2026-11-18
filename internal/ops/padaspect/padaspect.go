@@ -10,8 +10,6 @@ import (
 	"image"
 	"image/draw"
 	"math"
-	"os"
-	"path/filepath"
 
 	"github.com/disintegration/imaging"
 
@@ -80,74 +78,43 @@ func CanvasSize(cfg Config) (w, h int, err error) {
 
 // Run pads one file onto the configured canvas.
 func Run(ctx context.Context, src string, cfg Config) ops.Result {
-	src = filepath.Clean(src)
-	srcExt := imageio.NormalizeExt(filepath.Ext(src))
-
-	var inputSize int64
-	if info, err := os.Stat(src); err == nil {
-		inputSize = info.Size()
-	}
+	source := pipeline.ReadSource(src)
 	canvasW, canvasH, err := CanvasSize(cfg)
 	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
+		return source.Failed(err)
 	}
 	if cfg.Subject == Trim && (cfg.Threshold < 1 || cfg.Threshold > 100) {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: "色差容忍度必须在 1-100 之间", InputSize: inputSize}
+		return source.Failed(errors.New("色差容忍度必须在 1-100 之间"))
 	}
-
-	format, err := targetFormat(cfg.Format, srcExt)
+	format, err := imageio.OutputFormat(cfg.Format, source.Extension())
 	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
+		return source.Failed(err)
 	}
-
-	if err := ctx.Err(); err != nil {
-		return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
-	}
-	img, err := imageio.DecodeFile(src)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: fmt.Sprintf("图片文件解析失败: %v", err), InputSize: inputSize}
-	}
-
-	subject, err := subjectImage(img, cfg)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	rawW, rawH := subject.Bounds().Dx(), subject.Bounds().Dy()
-
-	// The subject keeps its ratio: it fills the configured share of the canvas
-	// height unless that would push it past 95% of the canvas width.
-	ratio := float64(cfg.SubjectRatio) / 100
-	scale := float64(canvasH) * ratio / float64(rawH)
-	if maxW := float64(canvasW) * 0.95; float64(rawW)*scale > maxW {
-		scale = maxW / float64(rawW)
-	}
-	sw := max(1, int(math.Round(float64(rawW)*scale)))
-	sh := max(1, int(math.Round(float64(rawH)*scale)))
-	scaled := imaging.Resize(subject, sw, sh, imaging.Lanczos)
-
-	canvas := image.NewNRGBA(image.Rect(0, 0, canvasW, canvasH))
-	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: cfg.Fill.Color(img)}, image.Point{}, draw.Src)
-	left := (canvasW - sw) / 2
-	top := (canvasH - sh) / 2
-	draw.Draw(canvas, image.Rect(left, top, left+sw, top+sh), scaled, scaled.Bounds().Min, draw.Over)
-
-	dir, base, outExt, err := cfg.Policy.Target(src, format.Ext(), output.Pad)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	out, outSize, err := pipeline.Emit(ctx, dir, base, outExt, canvas, format)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
+	return source.Run(ctx, output.Pad, cfg.Policy, format, func(img image.Image) (image.Image, string, error) {
+		subject, err := subjectImage(img, cfg)
+		if err != nil {
+			return nil, "", err
 		}
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	return ops.Result{
-		Status: ops.StatusSuccess, File: src, Output: out,
-		Reason:    fmt.Sprintf("%d:%d 画布 · 主体 %d%%", cfg.AspectW, cfg.AspectH, cfg.SubjectRatio),
-		InputSize: inputSize, OutputSize: outSize,
-		Width: canvasW, Height: canvasH,
-	}
+		rawW, rawH := subject.Bounds().Dx(), subject.Bounds().Dy()
+
+		// The subject keeps its ratio: it fills the configured share of the canvas
+		// height unless that would push it past 95% of the canvas width.
+		ratio := float64(cfg.SubjectRatio) / 100
+		scale := float64(canvasH) * ratio / float64(rawH)
+		if maxW := float64(canvasW) * 0.95; float64(rawW)*scale > maxW {
+			scale = maxW / float64(rawW)
+		}
+		sw := max(1, int(math.Round(float64(rawW)*scale)))
+		sh := max(1, int(math.Round(float64(rawH)*scale)))
+		scaled := imaging.Resize(subject, sw, sh, imaging.Lanczos)
+
+		canvas := image.NewNRGBA(image.Rect(0, 0, canvasW, canvasH))
+		draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: cfg.Fill.Color(img)}, image.Point{}, draw.Src)
+		left := (canvasW - sw) / 2
+		top := (canvasH - sh) / 2
+		draw.Draw(canvas, image.Rect(left, top, left+sw, top+sh), scaled, scaled.Bounds().Min, draw.Over)
+		return canvas, fmt.Sprintf("%d:%d 画布 · 主体 %d%%", cfg.AspectW, cfg.AspectH, cfg.SubjectRatio), nil
+	})
 }
 
 // subjectImage returns the trimmed subject or the whole image. The result may
@@ -169,13 +136,6 @@ func subjectImage(img image.Image, cfg Config) (image.Image, error) {
 	return imaging.Crop(img, image.Rect(
 		b.Min.X+cuts.Left, b.Min.Y+cuts.Top,
 		b.Min.X+cuts.Left+w, b.Min.Y+cuts.Top+h)), nil
-}
-
-func targetFormat(choice, srcExt string) (imageio.Format, error) {
-	if choice == "" || choice == "original" {
-		return imageio.PreserveFormat(srcExt), nil
-	}
-	return imageio.ParseFormat(choice)
 }
 
 // RunAll pads paths with a bounded worker pool.

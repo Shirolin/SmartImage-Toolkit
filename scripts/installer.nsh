@@ -5,25 +5,28 @@
 
 !include "LogicLib.nsh"
 
-; The verbs are registered on the perceived image type and on every supported
-; extension. Explorer keeps only verbs that each selected file's class offers,
-; so the extension classes are what make a mixed selection (a PNG next to a
-; WebP) show the entries.
-!macro ctxVerb CLASS VERB LABEL ARGS
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\${CLASS}\shell\${VERB}" "" "${LABEL}"
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\${CLASS}\shell\${VERB}" "Icon" "$INSTDIR\smartimage.exe,0"
-  WriteRegStr HKCU "Software\Classes\SystemFileAssociations\${CLASS}\shell\${VERB}\command" "" '"$INSTDIR\smartimage.exe" ${ARGS} "%1"'
+!macro updateContextMenu ACTION
+  ClearErrors
+  ExecWait '"$INSTDIR\SmartImage.exe" ${ACTION}' $0
+  ${If} ${Errors}
+    DetailPrint "Could not run SmartImage to update the image context menu."
+  ${ElseIf} $0 != 0
+    DetailPrint "SmartImage could not update the image context menu (exit code $0)."
+  ${EndIf}
 !macroend
 
-!macro ctxClass CLASS
-  !insertmacro ctxVerb "${CLASS}" SmartImageOpen "用 SmartImage 打开" ""
-  !insertmacro ctxVerb "${CLASS}" SmartImageWebP "转成 WebP (SmartImage)" "--quick webp"
-!macroend
-
-!macro ctxClassRemove CLASS
-  DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\${CLASS}\shell\SmartImageOpen"
-  DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\${CLASS}\shell\SmartImageWebP"
-!macroend
+Function un.RemoveLegacyContextMenu
+  StrCpy $0 0
+  ${Do}
+    EnumRegKey $1 HKCU "Software\Classes\SystemFileAssociations" $0
+    ${If} $1 == ""
+      ${ExitDo}
+    ${EndIf}
+    DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\$1\shell\SmartImageOpen"
+    DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\$1\shell\SmartImageWebP"
+    IntOp $0 $0 + 1
+  ${Loop}
+FunctionEnd
 
 !macro customInstall
   ; The matting worker is built with MSVC and imports the 2015-2022 runtime.
@@ -45,29 +48,14 @@
   ${EndIf}
   Delete "$INSTDIR\vc_redist.x64.exe"
 
-  !insertmacro ctxClass image
-  !insertmacro ctxClass .png
-  !insertmacro ctxClass .jpg
-  !insertmacro ctxClass .jpeg
-  !insertmacro ctxClass .jfif
-  !insertmacro ctxClass .webp
-  !insertmacro ctxClass .avif
-  !insertmacro ctxClass .gif
-  !insertmacro ctxClass .bmp
-  !insertmacro ctxClass .tif
-  !insertmacro ctxClass .tiff
+  !insertmacro updateContextMenu "--register-context-menu"
 !macroend
 
 !macro customUnInstall
-  !insertmacro ctxClassRemove image
-  !insertmacro ctxClassRemove .png
-  !insertmacro ctxClassRemove .jpg
-  !insertmacro ctxClassRemove .jpeg
-  !insertmacro ctxClassRemove .jfif
-  !insertmacro ctxClassRemove .webp
-  !insertmacro ctxClassRemove .avif
-  !insertmacro ctxClassRemove .gif
-  !insertmacro ctxClassRemove .bmp
-  !insertmacro ctxClassRemove .tif
-  !insertmacro ctxClassRemove .tiff
+  ClearErrors
+  ExecWait '"$INSTDIR\SmartImage.exe" --unregister-context-menu' $0
+  ${If} ${Errors}
+  ${OrIf} $0 != 0
+    Call un.RemoveLegacyContextMenu
+  ${EndIf}
 !macroend

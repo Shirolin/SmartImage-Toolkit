@@ -56,19 +56,24 @@ func (a *app) toggleShortcut(k shortcutKind) {
 	}
 }
 
-// toggleContextMenu registers the app's right-click actions or removes them.
-// They are the same menu items the installer writes, so both can manage them.
-func (a *app) toggleContextMenu() {
-	registered := contextMenuRegistered()
-	var err error
-	if registered {
-		err = unregisterContextMenu()
-	} else {
-		var target string
-		if target, err = os.Executable(); err == nil {
-			err = registerContextMenu(target)
-		}
+func contextMenuRegistered() bool {
+	exe, err := os.Executable()
+	return err == nil && imageMenu.registered(exe)
+}
+
+func setContextMenu(enabled bool) error {
+	if !enabled {
+		return imageMenu.unregister()
 	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return imageMenu.register(exe)
+}
+
+func (a *app) toggleContextMenu(registered bool) {
+	err := setContextMenu(!registered)
 	switch {
 	case err != nil:
 		a.notice = "右键菜单操作失败：" + err.Error()

@@ -29,15 +29,26 @@ type Result struct {
 type Options struct {
 	// Supported reports whether a file has a supported image extension.
 	Supported func(path string) bool
-	// MaxDepth limits directory recursion; zero means 10.
+	// MaxDepth limits directory recursion; zero means 10, negative means unlimited.
 	MaxDepth int
 	// OnWarn receives every skipped entry.
 	OnWarn func(Warning)
 }
 
+func PathKey(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	path = filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+	}
+	return path
+}
+
 // Discover expands targets into absolute image paths.
 func Discover(targets []string, opts Options) Result {
-	if opts.MaxDepth <= 0 {
+	if opts.MaxDepth == 0 {
 		opts.MaxDepth = 10
 	}
 	if opts.Supported == nil {
@@ -61,10 +72,7 @@ func Discover(targets []string, opts Options) Result {
 		if err != nil {
 			abs = path
 		}
-		key := abs
-		if runtime.GOOS == "windows" {
-			key = strings.ToLower(abs)
-		}
+		key := PathKey(abs)
 		if opts.Supported(abs) && !seen[key] {
 			seen[key] = true
 			res.Files = append(res.Files, abs)
@@ -87,7 +95,6 @@ func Discover(targets []string, opts Options) Result {
 			continue
 		}
 
-		rootDepth := strings.Count(filepath.Clean(target), string(os.PathSeparator))
 		err = filepath.WalkDir(target, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				warn(Warning{Kind: "error", Path: path, Message: err.Error()})
@@ -101,8 +108,11 @@ func Discover(targets []string, opts Options) Result {
 				return nil
 			}
 			if d.IsDir() {
-				depth := strings.Count(filepath.Clean(path), string(os.PathSeparator)) - rootDepth
-				if depth >= opts.MaxDepth {
+				if opts.MaxDepth < 0 || path == target {
+					return nil
+				}
+				relative, err := filepath.Rel(target, path)
+				if err == nil && 1+strings.Count(relative, string(os.PathSeparator)) >= opts.MaxDepth {
 					n := countSupported(path, opts.Supported)
 					warn(Warning{
 						Kind:    "depth",

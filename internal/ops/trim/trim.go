@@ -10,8 +10,6 @@ import (
 	"image"
 	"image/draw"
 	"math"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/disintegration/imaging"
@@ -175,71 +173,30 @@ func applySides(c Cuts, sides Sides) Cuts {
 
 // Run trims one file. The output location and name come from the policy.
 func Run(ctx context.Context, src string, cfg Config) ops.Result {
-	src = filepath.Clean(src)
-	srcExt := imageio.NormalizeExt(filepath.Ext(src))
-
-	var inputSize int64
-	if info, err := os.Stat(src); err == nil {
-		inputSize = info.Size()
-	}
+	source := pipeline.ReadSource(src)
 	if cfg.Threshold < 1 || cfg.Threshold > 100 {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: "色差容忍度必须在 1-100 之间", InputSize: inputSize}
+		return source.Failed(errors.New("色差容忍度必须在 1-100 之间"))
 	}
-
-	format, err := targetFormat(cfg.Format, srcExt)
+	format, err := imageio.OutputFormat(cfg.Format, source.Extension())
 	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
+		return source.Failed(err)
 	}
-
-	if err := ctx.Err(); err != nil {
-		return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
-	}
-	img, err := imageio.DecodeFile(src)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: fmt.Sprintf("图片文件解析失败: %v", err), InputSize: inputSize}
-	}
-
-	cuts := applySides(Detect(img, cfg.Threshold), cfg.Sides)
-	if cuts.Empty() {
-		return ops.Result{
-			Status: ops.StatusSkipped, File: src,
-			Reason: "没有检测到可去除的边缘", InputSize: inputSize,
+	return source.Run(ctx, output.Trim, cfg.Policy, format, func(img image.Image) (image.Image, string, error) {
+		cuts := applySides(Detect(img, cfg.Threshold), cfg.Sides)
+		if cuts.Empty() {
+			return nil, "没有检测到可去除的边缘", nil
 		}
-	}
-
-	b := img.Bounds()
-	newW := b.Dx() - cuts.Left - cuts.Right
-	newH := b.Dy() - cuts.Top - cuts.Bottom
-	if newW <= 0 || newH <= 0 {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: "容差计算结果为空或越界", InputSize: inputSize}
-	}
-	outImg := imaging.Crop(img, image.Rect(
-		b.Min.X+cuts.Left, b.Min.Y+cuts.Top,
-		b.Min.X+b.Dx()-cuts.Right, b.Min.Y+b.Dy()-cuts.Bottom))
-
-	dir, base, outExt, err := cfg.Policy.Target(src, format.Ext(), output.Trim)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	out, outSize, err := pipeline.Emit(ctx, dir, base, outExt, outImg, format)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
+		bounds := img.Bounds()
+		width := bounds.Dx() - cuts.Left - cuts.Right
+		height := bounds.Dy() - cuts.Top - cuts.Bottom
+		if width <= 0 || height <= 0 {
+			return nil, "", errors.New("容差计算结果为空或越界")
 		}
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	return ops.Result{
-		Status: ops.StatusSuccess, File: src, Output: out,
-		Reason: cuts.Note(), InputSize: inputSize, OutputSize: outSize,
-		Width: newW, Height: newH,
-	}
-}
-
-func targetFormat(choice, srcExt string) (imageio.Format, error) {
-	if choice == "" || choice == "original" {
-		return imageio.PreserveFormat(srcExt), nil
-	}
-	return imageio.ParseFormat(choice)
+		cropped := imaging.Crop(img, image.Rect(
+			bounds.Min.X+cuts.Left, bounds.Min.Y+cuts.Top,
+			bounds.Max.X-cuts.Right, bounds.Max.Y-cuts.Bottom))
+		return cropped, cuts.Note(), nil
+	})
 }
 
 // RunAll trims paths with a bounded worker pool.

@@ -141,7 +141,7 @@ func Run(ctx context.Context, src string, cfg Config) ops.Result {
 	if info, err := os.Stat(src); err == nil {
 		inputSize = info.Size()
 	}
-	format, err := targetFormat(cfg.Format, srcExt)
+	format, err := imageio.OutputFormat(cfg.Format, srcExt)
 	if err != nil {
 		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
 	}
@@ -223,13 +223,6 @@ func writeTile(path string, img image.Image, format imageio.Format) (int64, erro
 		return 0, err
 	}
 	return info.Size(), nil
-}
-
-func targetFormat(choice, srcExt string) (imageio.Format, error) {
-	if choice == "" || choice == "original" {
-		return imageio.PreserveFormat(srcExt), nil
-	}
-	return imageio.ParseFormat(choice)
 }
 
 // RunAll splits paths with a bounded worker pool.

@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"image"
 	"image/draw"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/Shirolin/SmartImage-Toolkit/internal/imageio"
@@ -43,53 +41,21 @@ type Config struct {
 // Run centers one file. The canvas keeps its original size; only the margins
 // move.
 func Run(ctx context.Context, src string, cfg Config) ops.Result {
-	src = filepath.Clean(src)
-	srcExt := imageio.NormalizeExt(filepath.Ext(src))
-
-	var inputSize int64
-	if info, err := os.Stat(src); err == nil {
-		inputSize = info.Size()
-	}
+	source := pipeline.ReadSource(src)
 	if cfg.Threshold < 1 || cfg.Threshold > 100 {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: "色差容忍度必须在 1-100 之间", InputSize: inputSize}
+		return source.Failed(errors.New("色差容忍度必须在 1-100 之间"))
 	}
-
-	format, err := targetFormat(cfg.Format, srcExt)
+	format, err := imageio.OutputFormat(cfg.Format, source.Extension())
 	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
+		return source.Failed(err)
 	}
-
-	if err := ctx.Err(); err != nil {
-		return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
-	}
-	img, err := imageio.DecodeFile(src)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: fmt.Sprintf("图片文件解析失败: %v", err), InputSize: inputSize}
-	}
-
-	b := img.Bounds()
-	w, h := b.Dx(), b.Dy()
-	canvas, noteText, skip := Recenter(img, cfg.Threshold, cfg.Sides, cfg.Fill)
-	if canvas == nil {
-		return ops.Result{Status: ops.StatusSkipped, File: src, Reason: skip, InputSize: inputSize}
-	}
-
-	dir, base, outExt, err := cfg.Policy.Target(src, format.Ext(), output.Center)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	out, outSize, err := pipeline.Emit(ctx, dir, base, outExt, canvas, format)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
+	return source.Run(ctx, output.Center, cfg.Policy, format, func(img image.Image) (image.Image, string, error) {
+		canvas, noteText, skip := Recenter(img, cfg.Threshold, cfg.Sides, cfg.Fill)
+		if canvas == nil {
+			return nil, skip, nil
 		}
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	return ops.Result{
-		Status: ops.StatusSuccess, File: src, Output: out,
-		Reason: noteText, InputSize: inputSize, OutputSize: outSize,
-		Width: w, Height: h,
-	}
+		return canvas, noteText, nil
+	})
 }
 
 // Recenter returns a canvas of the image's size with its subject centered on
@@ -142,13 +108,6 @@ func pair(label string, a, b int) string {
 		return fmt.Sprintf("%s各 %d", label, a)
 	}
 	return fmt.Sprintf("%s %d / %d", label, a, b)
-}
-
-func targetFormat(choice, srcExt string) (imageio.Format, error) {
-	if choice == "" || choice == "original" {
-		return imageio.PreserveFormat(srcExt), nil
-	}
-	return imageio.ParseFormat(choice)
 }
 
 // RunAll centers paths with a bounded worker pool.

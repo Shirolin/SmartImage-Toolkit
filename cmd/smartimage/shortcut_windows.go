@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -180,45 +183,68 @@ func createShortcutAt(link, target string) error {
 	})
 }
 
-// The right-click actions live where the installer writes them, under the
-// shell's image association. The perceived type covers every image, while the
-// extension classes are needed for a mixed selection such as a PNG next to a
-// WebP: Explorer only keeps verbs that each selected file's class offers.
+// Explorer only keeps verbs that every selected file's class offers.
 var contextMenuClasses = []string{
 	"image",
 	".png", ".jpg", ".jpeg", ".jfif", ".webp", ".avif", ".gif", ".bmp", ".tif", ".tiff",
 }
 
-var contextMenuVerbs = []struct {
-	key, label, command string
-}{
-	{"SmartImageOpen", "用 SmartImage 打开", `"%s" "%%1"`},
-	{"SmartImageWebP", "转成 WebP (SmartImage)", `"%s" --quick webp "%%1"`},
+type contextMenuVerb struct {
+	key, label, arguments string
+}
+
+var contextMenuVerbs = []contextMenuVerb{
+	{key: "SmartImageOpen", label: "用 SmartImage 打开"},
+	{key: "SmartImageWebP", label: "转成 WebP (SmartImage)", arguments: "--quick webp"},
+}
+
+type contextMenu struct{ root registry.Key }
+
+var imageMenu = contextMenu{root: registry.CURRENT_USER}
+
+func (verb contextMenuVerb) command(exe string) string {
+	command := `"` + exe + `"`
+	if verb.arguments != "" {
+		command += " " + verb.arguments
+	}
+	return command + ` "%1"`
+}
+
+func (verb contextMenuVerb) matches(command, exe string) bool {
+	args, err := windows.DecomposeCommandLine(command)
+	return err == nil && len(args) >= 2 &&
+		strings.EqualFold(filepath.Clean(args[0]), filepath.Clean(exe)) &&
+		slices.Equal(args[1:len(args)-1], strings.Fields(verb.arguments)) &&
+		args[len(args)-1] == "%1" && strings.HasSuffix(strings.TrimSpace(command), ` "%1"`)
 }
 
 func contextMenuKey(class, verb string) string {
 	return `Software\Classes\SystemFileAssociations\` + class + `\shell\` + verb
 }
 
-func contextMenuRegistered() bool {
+func (menu contextMenu) registered(exe string) bool {
 	for _, class := range contextMenuClasses {
 		for _, verb := range contextMenuVerbs {
-			k, err := registry.OpenKey(registry.CURRENT_USER,
+			k, err := registry.OpenKey(menu.root,
 				contextMenuKey(class, verb.key)+`\command`, registry.QUERY_VALUE)
 			if err != nil {
 				return false
 			}
+			command, _, err := k.GetStringValue("")
 			k.Close()
+			if err != nil || !verb.matches(command, exe) {
+				return false
+			}
 		}
 	}
 	return true
 }
 
-func registerContextMenu(exe string) error {
+func (menu contextMenu) register(exe string) error {
 	for _, class := range contextMenuClasses {
 		for _, verb := range contextMenuVerbs {
 			path := contextMenuKey(class, verb.key)
-			k, _, err := registry.CreateKey(registry.CURRENT_USER, path, registry.SET_VALUE)
+			k, _, err := registry.CreateKey(menu.root, path, registry.SET_VALUE)
 			if err != nil {
 				return err
 			}
@@ -230,11 +256,11 @@ func registerContextMenu(exe string) error {
 			if err != nil {
 				return err
 			}
-			cmd, _, err := registry.CreateKey(registry.CURRENT_USER, path+`\command`, registry.SET_VALUE)
+			cmd, _, err := registry.CreateKey(menu.root, path+`\command`, registry.SET_VALUE)
 			if err != nil {
 				return err
 			}
-			err = cmd.SetStringValue("", fmt.Sprintf(verb.command, exe))
+			err = cmd.SetStringValue("", verb.command(exe))
 			cmd.Close()
 			if err != nil {
 				return err
@@ -244,16 +270,17 @@ func registerContextMenu(exe string) error {
 	return nil
 }
 
-func unregisterContextMenu() error {
+func (menu contextMenu) unregister() error {
+	var result error
 	for _, class := range contextMenuClasses {
 		for _, verb := range contextMenuVerbs {
 			path := contextMenuKey(class, verb.key)
 			for _, key := range []string{path + `\command`, path} {
-				if err := registry.DeleteKey(registry.CURRENT_USER, key); err != nil && !errors.Is(err, registry.ErrNotExist) {
-					return err
+				if err := registry.DeleteKey(menu.root, key); err != nil && !errors.Is(err, registry.ErrNotExist) {
+					result = errors.Join(result, fmt.Errorf("%s: %w", key, err))
 				}
 			}
 		}
 	}
-	return nil
+	return result
 }

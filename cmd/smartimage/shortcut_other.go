@@ -10,8 +10,12 @@ func shortcutPath(shortcutKind) (string, error) { return "", errNoShortcuts }
 
 func createShortcutAt(string, string) error { return errNoShortcuts }
 
-func contextMenuRegistered() bool { return false }
+type contextMenu struct{}
 
-func registerContextMenu(string) error { return errNoShortcuts }
+var imageMenu contextMenu
 
-func unregisterContextMenu() error { return errNoShortcuts }
+func (contextMenu) registered(string) bool { return false }
+
+func (contextMenu) register(string) error { return errNoShortcuts }
+
+func (contextMenu) unregister() error { return errNoShortcuts }

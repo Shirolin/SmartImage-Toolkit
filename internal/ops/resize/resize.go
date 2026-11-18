@@ -9,8 +9,6 @@ import (
 	"image"
 	"image/draw"
 	"math"
-	"os"
-	"path/filepath"
 
 	"github.com/disintegration/imaging"
 
@@ -126,66 +124,23 @@ func scaleHeight(srcH, targetW, srcW int) int {
 
 // Run resizes one file. The output location and name come from the policy.
 func Run(ctx context.Context, src string, cfg Config) ops.Result {
-	src = filepath.Clean(src)
-	srcExt := imageio.NormalizeExt(filepath.Ext(src))
-
-	var inputSize int64
-	if info, err := os.Stat(src); err == nil {
-		inputSize = info.Size()
-	}
-
-	format, err := targetFormat(cfg.Format, srcExt)
+	source := pipeline.ReadSource(src)
+	srcExt := source.Extension()
+	format, err := imageio.OutputFormat(cfg.Format, srcExt)
 	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
+		return source.Failed(err)
 	}
-	targetExt := format.Ext()
-
-	if err := ctx.Err(); err != nil {
-		return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
-	}
-
-	img, err := imageio.DecodeFile(src)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: fmt.Sprintf("图片文件解析失败: %v", err), InputSize: inputSize}
-	}
-	b := img.Bounds()
-	targetW, targetH, err := TargetSize(b.Dx(), b.Dy(), cfg)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-
-	if targetW == b.Dx() && targetH == b.Dy() && targetExt == srcExt {
-		return ops.Result{
-			Status: ops.StatusSkipped, File: src,
-			Reason: "尺寸未变化且未要求格式转换，已跳过", InputSize: inputSize,
+	return source.Run(ctx, output.Resize, cfg.Policy, format, func(img image.Image) (image.Image, string, error) {
+		bounds := img.Bounds()
+		width, height, err := TargetSize(bounds.Dx(), bounds.Dy(), cfg)
+		if err != nil {
+			return nil, "", err
 		}
-	}
-
-	outImg := transform(img, targetW, targetH, cfg)
-
-	dir, base, outExt, err := cfg.Policy.Target(src, targetExt, output.Resize)
-	if err != nil {
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	out, outSize, err := pipeline.Emit(ctx, dir, base, outExt, outImg, format)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return ops.Result{Status: ops.StatusCanceled, File: src, InputSize: inputSize}
+		if width == bounds.Dx() && height == bounds.Dy() && format.Ext() == srcExt {
+			return nil, "尺寸未变化且未要求格式转换，已跳过", nil
 		}
-		return ops.Result{Status: ops.StatusError, File: src, Reason: err.Error(), InputSize: inputSize}
-	}
-	return ops.Result{
-		Status: ops.StatusSuccess, File: src, Output: out,
-		InputSize: inputSize, OutputSize: outSize,
-		Width: targetW, Height: targetH,
-	}
-}
-
-func targetFormat(choice, srcExt string) (imageio.Format, error) {
-	if choice == "" || choice == "original" {
-		return imageio.PreserveFormat(srcExt), nil
-	}
-	return imageio.ParseFormat(choice)
+		return transform(img, width, height, cfg), "", nil
+	})
 }
 
 func transform(img image.Image, w, h int, cfg Config) image.Image {
