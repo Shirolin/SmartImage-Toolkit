@@ -402,6 +402,7 @@ func (a *app) cropAspectConfig() cropaspect.Config {
 	return cropaspect.Config{
 		AspectW:  w,
 		AspectH:  h,
+		Scale:    a.cropScale,
 		Resize:   a.cropResize,
 		LongEdge: int(math.Round(a.cropLongEdge)),
 		CenterX:  a.cropFX,

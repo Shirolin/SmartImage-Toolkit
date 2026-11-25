@@ -172,6 +172,10 @@ type app struct {
 	cropResize    bool
 	cropLongEdge  float64
 	cropAnchor    cropAnchor
+	cropScale     float64
+	cropZoom      float64
+	cropPanX      float32
+	cropPanY      float32
 	cropFX        float64
 	cropFY        float64
 	cropThreshold float64
@@ -284,6 +288,8 @@ func main() {
 		cropResize:      true,
 		cropLongEdge:    512,
 		cropAnchor:      anchorFrame,
+		cropScale:       1,
+		cropZoom:        cropMinZoom,
 		cropFX:          0.5,
 		cropFY:          0.5,
 		cropThreshold:   10,

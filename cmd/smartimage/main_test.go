@@ -42,6 +42,8 @@ func newTestApp(t *testing.T) *app {
 		cropResize:      true,
 		cropLongEdge:    512,
 		cropAnchor:      anchorFrame,
+		cropScale:       1,
+		cropZoom:        cropMinZoom,
 		cropFX:          0.5,
 		cropFY:          0.5,
 		cropThreshold:   10,
@@ -264,11 +266,15 @@ func TestCropPagePreviewsEachMode(t *testing.T) {
 func TestCropFrameDragStaysInside(t *testing.T) {
 	a := newTestApp(t)
 	a.page = pageCrop
+	a.cropScale = 1
 	a.cropPreview = &cropPreview{imgW: 300, imgH: 200, draw: ui.Rect{W: 300, H: 200}}
 
 	// A 1:1 frame on a 300×200 source is 200 wide, so its centre can only
 	// travel between x=100 and x=200.
-	if !a.moveCropFrame(0, 100) {
+	if !a.beginCropDrag(cropMove, 150, 100) {
+		t.Fatal("the frame's middle should start a move")
+	}
+	if !a.dragCrop(0, 100) {
 		t.Fatal("dragging to the left edge should move the frame")
 	}
 	if want := 100.0 / 300; math.Abs(a.cropFX-want) > 1e-9 || a.cropFY != 0.5 {
@@ -277,9 +283,209 @@ func TestCropFrameDragStaysInside(t *testing.T) {
 	if a.cropAnchor != anchorCustom {
 		t.Fatalf("anchor = %v, want custom after a drag", a.cropAnchor)
 	}
-	a.moveCropFrame(300, 100)
+	if a.cropScale != 1 {
+		t.Fatalf("scale = %v, want the frame to keep its size", a.cropScale)
+	}
+	a.dragCrop(300, 100)
 	if want := 200.0 / 300; math.Abs(a.cropFX-want) > 1e-9 {
 		t.Fatalf("frame = %v, want %v", a.cropFX, want)
+	}
+}
+
+func TestCropHandleShrinksTheFrame(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.cropScale = 1
+	a.cropPreview = &cropPreview{imgW: 400, imgH: 400, draw: ui.Rect{W: 400, H: 400}}
+
+	// Pulling the bottom-right handle to the middle halves the 1:1 frame and
+	// keeps the opposite corner where it was.
+	if !a.beginCropDrag(cropSE, 400, 400) {
+		t.Fatal("the corner handle should start a resize")
+	}
+	if !a.dragCrop(200, 200) {
+		t.Fatal("dragging the handle inward should resize the frame")
+	}
+	if math.Abs(a.cropScale-0.5) > 1e-9 {
+		t.Fatalf("scale = %v, want 0.5", a.cropScale)
+	}
+	if math.Abs(a.cropFX-0.25) > 1e-9 || math.Abs(a.cropFY-0.25) > 1e-9 {
+		t.Fatalf("centre = %v,%v, want 0.25,0.25", a.cropFX, a.cropFY)
+	}
+	if w, h := a.cropFrameSize(); w != 200 || h != 200 {
+		t.Fatalf("frame = %d×%d, want 200×200", w, h)
+	}
+}
+
+// TestCropCanvasPointerDrivesTheFrame goes through the canvas entry point, so
+// the hit test, the drag and the write-back are all exercised as the mouse
+// would.
+func TestCropCanvasPointerDrivesTheFrame(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.cropScale = 1
+	a.cropPreview = &cropPreview{
+		imgW: 400, imgH: 400, dispW: 400, dispH: 400,
+		bitmap: ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 400, 400))),
+		box:    ui.Rect{W: 400, H: 400},
+		draw:   ui.Rect{W: 400, H: 400},
+	}
+	down := ui.InputEvent{Kind: ui.InputPointerDown, X: 400, Y: 400}
+	if !a.cropInput(down) {
+		t.Fatal("pressing the bottom-right handle should start a resize")
+	}
+	if a.cropPreview.drag != cropSE {
+		t.Fatalf("grabbed %v, want the south-east handle", a.cropPreview.drag)
+	}
+	if !a.cropInput(ui.InputEvent{Kind: ui.InputPointerMove, X: 200, Y: 200}) {
+		t.Fatal("moving inward should resize the frame")
+	}
+	if math.Abs(a.cropScale-0.5) > 1e-9 {
+		t.Fatalf("scale = %v, want 0.5", a.cropScale)
+	}
+	a.cropInput(ui.InputEvent{Kind: ui.InputPointerUp, X: 200, Y: 200})
+	if a.cropPreview.dragging {
+		t.Fatal("releasing should end the drag")
+	}
+}
+
+// TestCropWheelZoomsAboutThePointer checks the source pixel under the cursor
+// stays put, which is what makes a small frame easy to place.
+func TestCropWheelZoomsAboutThePointer(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.cropScale = 1
+	a.cropPreview = &cropPreview{
+		imgW: 400, imgH: 400, dispW: 400, dispH: 400,
+		bitmap: ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 400, 400))),
+		box:    ui.Rect{W: 400, H: 400},
+		draw:   ui.Rect{W: 400, H: 400},
+	}
+	// The real canvas paints this rect; the wheel maps through it.
+	before := a.cropImageRect(a.cropPreview.box)
+	a.cropPreview.draw = before
+	fx0 := (300 - before.X) / before.W
+	fy0 := (100 - before.Y) / before.H
+	// Zoom until the picture is larger than the canvas, which is when the
+	// pointer can stay anchored instead of the pan being clamped back.
+	for i := 0; i < 5; i++ {
+		if !a.cropInput(ui.InputEvent{Kind: ui.InputScroll, X: 300, Y: 100, DY: -1}) {
+			t.Fatal("scrolling up should zoom in")
+		}
+	}
+	if a.cropZoom < 2 {
+		t.Fatalf("zoom = %v, want well above fit", a.cropZoom)
+	}
+	draw := a.cropImageRect(a.cropPreview.box)
+	if fx := (300 - draw.X) / draw.W; math.Abs(float64(fx-fx0)) > 1e-3 {
+		t.Fatalf("source x under the cursor = %v, want %v", fx, fx0)
+	}
+	if fy := (100 - draw.Y) / draw.H; math.Abs(float64(fy-fy0)) > 1e-3 {
+		t.Fatalf("source y under the cursor = %v, want %v", fy, fy0)
+	}
+	a.cropInput(ui.InputEvent{Kind: ui.InputPointerDown, X: 10, Y: 10, Clicks: 2})
+	if a.cropZoom != cropMinZoom || a.cropPanX != 0 {
+		t.Fatalf("double-click = zoom %v pan %v, want fit", a.cropZoom, a.cropPanX)
+	}
+}
+
+// TestCropZoomButtonsWorkWithoutAWheel covers the canvas' own zoom controls,
+// which is what a mouse without a wheel (or a trackpad) reaches for.
+func TestCropZoomButtonsWorkWithoutAWheel(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.cropPreview = &cropPreview{
+		imgW: 400, imgH: 400, dispW: 400, dispH: 400,
+		bitmap: ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 400, 400))),
+		box:    ui.Rect{W: 400, H: 400},
+	}
+	a.cropPreview.draw = a.cropImageRect(a.cropPreview.box)
+	_, _, plus := cropZoomBar(a.cropPreview.box)
+	if !a.cropInput(ui.InputEvent{Kind: ui.InputPointerDown, X: plus.X + plus.W/2, Y: plus.Y + plus.H/2}) {
+		t.Fatal("pressing the plus button should zoom in")
+	}
+	if a.cropZoom <= cropMinZoom {
+		t.Fatalf("zoom = %v, want above fit", a.cropZoom)
+	}
+	if a.cropPreview.dragging {
+		t.Fatal("the zoom button must not start a frame drag")
+	}
+	minus, _, _ := cropZoomBar(a.cropPreview.box)
+	a.cropPreview.draw = a.cropImageRect(a.cropPreview.box)
+	if !a.cropInput(ui.InputEvent{Kind: ui.InputPointerDown, X: minus.X + minus.W/2, Y: minus.Y + minus.H/2}) {
+		t.Fatal("pressing the minus button should zoom out")
+	}
+	if a.cropZoom != cropMinZoom {
+		t.Fatalf("zoom = %v, want fit again", a.cropZoom)
+	}
+}
+
+// TestCropCanvasTakesTheEnginePointer renders the page and presses through the
+// window's own hit test, which is the path a real mouse takes: the canvas must
+// be the element that gets the press, not a wrapper that swallows it.
+func TestCropCanvasTakesTheEnginePointer(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	src := image.NewRGBA(image.Rect(0, 0, 400, 300))
+	for i := range src.Pix {
+		src.Pix[i] = 0xC0
+	}
+	item := &fileItem{path: `D:\pics\sheet.png`, name: "sheet.png", width: 400, height: 300}
+	a.files = []*fileItem{item}
+	a.cropPreview = &cropPreview{
+		item: item, shown: item, bitmap: ui.NewBitmap(src), probe: src,
+		imgW: 400, imgH: 300, dispW: 400, dispH: 300,
+	}
+
+	tt := render(t, a)
+	st := a.cropPreview
+	if st.box.W <= 0 || st.draw.W <= 0 {
+		t.Fatalf("the canvas did not paint: box %v draw %v", st.box, st.draw)
+	}
+	rect, ok := a.cropFrameRect(st.draw)
+	if !ok {
+		t.Fatalf("no frame on a 400×300 source: draw %v", st.draw)
+	}
+	cx, cy := rect.X+rect.W/2, rect.Y+rect.H/2
+	// The frame is the largest 1:1 rect, so its middle is a free move.
+	tt.Press(cx, cy)
+	if !st.dragging || st.drag != cropMove {
+		t.Fatalf("the press did not grab the frame: dragging %v drag %v", st.dragging, st.drag)
+	}
+	before := a.cropFX
+	tt.Move(cx-40, cy)
+	if a.cropFX == before {
+		t.Fatalf("moving the pointer did not reach the canvas: centre still %v", before)
+	}
+	tt.Release(cx-40, cy)
+	if st.dragging {
+		t.Fatal("the release did not end the drag")
+	}
+	if a.cropAnchor != anchorCustom {
+		t.Fatalf("anchor = %v, want custom after a drag", a.cropAnchor)
+	}
+	// The wheel goes through the same local-to-canvas mapping.
+	tt.Scroll(cx, cy, 0, -1)
+	if a.cropZoom <= cropMinZoom {
+		t.Fatalf("zoom = %v, want the wheel to zoom in", a.cropZoom)
+	}
+}
+
+func TestCropPixelHandleWritesInsets(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.crop = cropPixels
+	a.cropPreview = &cropPreview{imgW: 400, imgH: 400, draw: ui.Rect{W: 400, H: 400}}
+
+	// Dragging the right edge to x=150 leaves the other three insets alone.
+	if !a.beginCropDrag(cropE, 400, 200) {
+		t.Fatal("the right handle should start a resize")
+	}
+	if !a.dragCrop(150, 200) {
+		t.Fatal("dragging should write the insets")
+	}
+	if a.cropLeft != 0 || a.cropTop != 0 || a.cropBottom != 0 || math.Abs(a.cropRight-250) > 1e-9 {
+		t.Fatalf("insets = %v/%v/%v/%v, want 0/0/250/0", a.cropTop, a.cropBottom, a.cropLeft, a.cropRight)
 	}
 }
 

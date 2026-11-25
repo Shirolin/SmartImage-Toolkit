@@ -26,11 +26,14 @@ const MaxDim = 30000
 const maxRatio = 1000
 
 // Config is the operation input. AspectW:AspectH is the crop ratio;
-// CenterX/CenterY place the crop centre as a fraction of the source (0.5 is
-// the middle). With Resize the crop is scaled so its long edge is LongEdge
-// pixels. Format is "original" or an imageio format name.
+// Scale shrinks the frame below the largest ratio rect, as a fraction of it,
+// so every file is cut to the same share of its picture. CenterX/CenterY
+// place the crop centre as a fraction of the source (0.5 is the middle).
+// With Resize the crop is scaled so its long edge is LongEdge pixels. Format
+// is "original" or an imageio format name.
 type Config struct {
 	AspectW, AspectH int
+	Scale            float64
 	Resize           bool
 	LongEdge         int
 	CenterX, CenterY float64
@@ -45,6 +48,9 @@ func Validate(cfg Config) error {
 	}
 	if cfg.AspectW > maxRatio || cfg.AspectH > maxRatio {
 		return fmt.Errorf("比例数值最大 %d", maxRatio)
+	}
+	if cfg.Scale < 0 || cfg.Scale > 1 {
+		return errors.New("裁剪框大小必须在原图的 0-100% 之间")
 	}
 	if cfg.Resize && (cfg.LongEdge < 1 || cfg.LongEdge > MaxDim) {
 		return fmt.Errorf("输出长边必须在 1-%d 之间", MaxDim)
@@ -68,6 +74,19 @@ func RatioSize(width, height, aw, ah int) (int, int) {
 	w = min(max(w, 1), width)
 	h = min(max(h, 1), height)
 	return w, h
+}
+
+// FrameSize is the crop size: the largest w×h of ratio aw:ah inside the
+// source, times scale. A scale of 0 or above 1 keeps the largest frame.
+func FrameSize(width, height, aw, ah int, scale float64) (int, int) {
+	w, h := RatioSize(width, height, aw, ah)
+	if w < 1 || h < 1 {
+		return 0, 0
+	}
+	if scale <= 0 || scale > 1 {
+		return w, h
+	}
+	return max(1, int(math.Round(float64(w)*scale))), max(1, int(math.Round(float64(h)*scale)))
 }
 
 // LongEdgeSize scales w×h, keeping its ratio, so the longer side is longEdge.
@@ -109,7 +128,7 @@ func OutputSize(width, height int, cfg Config) (int, int, error) {
 	if err := Validate(cfg); err != nil {
 		return 0, 0, err
 	}
-	w, h := RatioSize(width, height, cfg.AspectW, cfg.AspectH)
+	w, h := FrameSize(width, height, cfg.AspectW, cfg.AspectH, cfg.Scale)
 	if w < 1 || h < 1 {
 		return 0, 0, errors.New("原图尺寸过小，无法按该比例裁剪")
 	}
@@ -131,7 +150,7 @@ func Run(ctx context.Context, src string, cfg Config) ops.Result {
 	}
 	return source.Run(ctx, output.CropAspect, cfg.Policy, format, func(img image.Image) (image.Image, string, error) {
 		b := img.Bounds()
-		cw, ch := RatioSize(b.Dx(), b.Dy(), cfg.AspectW, cfg.AspectH)
+		cw, ch := FrameSize(b.Dx(), b.Dy(), cfg.AspectW, cfg.AspectH, cfg.Scale)
 		if cw < 1 || ch < 1 {
 			return nil, "", errors.New("原图尺寸过小，无法按该比例裁剪")
 		}

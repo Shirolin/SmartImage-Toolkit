@@ -406,7 +406,7 @@ func (a *app) cropToolbar(c *ui.Context) {
 						}
 					})
 				}
-				toolbarNote(c, "四个方向都从原图外侧向内裁剪，单位 px")
+				toolbarNote(c, "拖动画框或直接填数字，单位 px")
 			})
 		} else {
 			ui.Row(c).FillWidth().Wrap().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
@@ -439,7 +439,7 @@ func (a *app) cropToolbar(c *ui.Context) {
 				if err := a.cropSubjectWarning(); err != "" {
 					components.Text(c, err).FontSize(11.5).TextColor(t.Warning).SingleLine()
 				} else if len(a.files) > 0 {
-					toolbarNote(c, "拖动画布里的裁剪框可调整位置")
+					toolbarNote(c, "拖动画框移动、拖手柄缩放，滚轮放大，双击复位")
 				}
 			})
 		}
