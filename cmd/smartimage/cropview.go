@@ -372,7 +372,7 @@ func (a *app) cropCanvas(c *ui.Context) {
 	case a.cropZoom > cropMinZoom:
 		cursor = ui.CursorGrab
 	}
-	e := ui.Box(c).FillWidth().Grow(1).MinHeight(120).MaxHeight(400).Clip().Radius(t.Radius).
+	e := ui.Box(c).FillWidth().Grow(3).MinHeight(120).MaxHeight(400).Clip().Radius(t.Radius).
 		Background(canvas).Border(1, t.Border.Alpha(0.6)).Cursor(cursor)
 	if st == nil || st.bitmap == nil {
 		e.Children(func() {
@@ -490,16 +490,25 @@ func (a *app) paintCropZoom(p *ui.Painter, r ui.Rect, t *ui.Theme) {
 }
 
 // paintCropHandles draws the eight grab points, which are what makes the
-// frame resizable rather than only movable.
+// frame resizable rather than only movable. The one under the pointer fills
+// in, so a handle reads as a target before it is grabbed.
 func (a *app) paintCropHandles(p *ui.Painter, rect ui.Rect, t *ui.Theme) {
 	const size = 7
 	cx, cy := rect.X+rect.W/2, rect.Y+rect.H/2
-	for _, pt := range [][2]float32{
-		{rect.X, rect.Y}, {cx, rect.Y}, {rect.X + rect.W, rect.Y},
-		{rect.X, cy}, {rect.X + rect.W, cy},
-		{rect.X, rect.Y + rect.H}, {cx, rect.Y + rect.H}, {rect.X + rect.W, rect.Y + rect.H},
+	for _, spot := range []struct {
+		h    cropHandle
+		x, y float32
+	}{
+		{cropNW, rect.X, rect.Y}, {cropN, cx, rect.Y}, {cropNE, rect.X + rect.W, rect.Y},
+		{cropW, rect.X, cy}, {cropE, rect.X + rect.W, cy},
+		{cropSW, rect.X, rect.Y + rect.H}, {cropS, cx, rect.Y + rect.H},
+		{cropSE, rect.X + rect.W, rect.Y + rect.H},
 	} {
-		box := ui.Rect{X: pt[0] - size/2, Y: pt[1] - size/2, W: size, H: size}
+		box := ui.Rect{X: spot.x - size/2, Y: spot.y - size/2, W: size, H: size}
+		if a.cropPreview.hover == spot.h || a.cropPreview.drag == spot.h {
+			p.Fill(box, t.Accent, 2)
+			continue
+		}
 		p.Fill(box, t.Background, 2)
 		p.Stroke(box, t.Accent, 2, 1.5)
 	}
@@ -579,7 +588,10 @@ func (a *app) cropInput(ev ui.InputEvent) bool {
 		return a.dragCrop(ev.X, ev.Y)
 	case ui.InputPointerUp:
 		was := st.dragging
-		st.dragging, st.drag, st.hover = false, cropNone, cropNone
+		st.dragging, st.drag = false, cropNone
+		// The pointer usually rests where the drag ended; the handle under it
+		// keeps its highlight instead of waiting for the next move.
+		st.hover = a.cropHit(ev.X, ev.Y)
 		if was {
 			a.invalidate()
 		}
