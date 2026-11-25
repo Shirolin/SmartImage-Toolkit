@@ -182,6 +182,8 @@ type app struct {
 	cropFormat    string
 	cropPreview   *cropPreview
 	previewSel    ui.Selection[any]
+	preview       *pagePreview
+	previewSource bool
 
 	fig figMode
 

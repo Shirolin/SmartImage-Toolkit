@@ -180,10 +180,23 @@ func (a *app) workPage(c *ui.Context, toolbar func(*ui.Context)) {
 		a.figureTabs(c)
 		toolbar(c)
 		if len(a.files) == 0 {
+			a.releasePagePreview()
 			a.emptyState(c)
 			return
 		}
-		a.queuePanel(c)
+		showPreview := a.wideEnough(c)
+		if showPreview {
+			a.syncPagePreview(a.currentOp())
+		} else {
+			// A narrow window shows no pane; do not keep its picture decoded.
+			a.releasePagePreview()
+		}
+		ui.Row(c).FillWidth().Grow(1).AlignItems(ui.Stretch).Gap(t.Space(3)).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Children(func() { a.queuePanel(c) })
+			if showPreview {
+				a.previewPane(c, a.currentOp())
+			}
+		})
 	})
 }
 
@@ -777,9 +790,11 @@ func (a *app) emptyState(c *ui.Context) {
 func (a *app) queuePanel(c *ui.Context) {
 	t := c.Theme()
 	op := a.currentOp()
-	// The crop page points the list's selection at the previewed image; other
-	// pages get plain rows back.
-	if a.page != pageCrop {
+	// Rows pick the image the page looks at, so the list keeps a selection
+	// wherever a preview follows it.
+	if a.page == pageCrop || a.wideEnough(c) {
+		a.list.Selection = &a.previewSel
+	} else {
 		a.list.Selection = nil
 	}
 	ui.Column(c).Grow(1).MinHeight(180).Background(t.Surface).Border(1, t.Border).Radius(t.Radius * 1.5).
