@@ -21,10 +21,12 @@ const (
 	Resize  Op = "resize"
 	Trim    Op = "trim"
 	Crop    Op = "crop"
-	Center  Op = "center"
-	Pad     Op = "pad"
-	Matting Op = "matting"
-	Split   Op = "split"
+	// CropAspect crops to a fixed ratio, optionally to an exact size.
+	CropAspect Op = "crop_aspect"
+	Center     Op = "center"
+	Pad        Op = "pad"
+	Matting    Op = "matting"
+	Split      Op = "split"
 )
 
 // DefaultSubfolder is the folder used when the location policy is Subfolder
@@ -37,7 +39,7 @@ func (op Op) DefaultSubfolder() string {
 		return "resized"
 	case Trim:
 		return "trimmed"
-	case Crop:
+	case Crop, CropAspect:
 		return "cropped"
 	case Center:
 		return "centered"
@@ -60,7 +62,7 @@ func (op Op) Suffix() string {
 		return "_resized"
 	case Trim:
 		return "_trimmed"
-	case Crop:
+	case Crop, CropAspect:
 		return "_cropped"
 	case Center:
 		return "_centered"

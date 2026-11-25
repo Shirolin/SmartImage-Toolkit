@@ -3,6 +3,7 @@ package main
 import (
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"testing"
 
@@ -35,6 +36,15 @@ func newTestApp(t *testing.T) *app {
 		trimThreshold:   10,
 		trimSides:       trim.All,
 		trimFormat:      "original",
+		cropPreset:      "1:1",
+		cropAspectW:     1,
+		cropAspectH:     1,
+		cropResize:      true,
+		cropLongEdge:    512,
+		cropAnchor:      anchorFrame,
+		cropFX:          0.5,
+		cropFY:          0.5,
+		cropThreshold:   10,
 		cropFormat:      "original",
 		fig:             figCenter,
 		centerThreshold: 10,
@@ -82,7 +92,7 @@ func render(t *testing.T, a *app) *ui.Tester {
 
 func TestEmptyStateInvitesDrop(t *testing.T) {
 	tt := render(t, newTestApp(t))
-	for _, want := range []string{"把图片或文件夹拖到这里", "选择图片", "选择文件夹"} {
+	for _, want := range []string{"把图片拖到这里", "选择图片", "选择文件夹"} {
 		if !tt.HasText(want) {
 			t.Fatalf("empty state is missing %q; texts = %v", want, tt.Texts())
 		}
@@ -105,7 +115,7 @@ func TestQueueShowsStatusSizesAndSavings(t *testing.T) {
 
 	tt := render(t, a)
 	for _, want := range []string{
-		"文件列表 · 3", "cover.png", "1920×1080", "2.3 MB → 469 KB  −80%", "完成",
+		"文件列表", "· 3", "cover.png", "1920×1080", "2.3 MB", "469 KB", "−80%", "完成",
 		"banner.jpg", "图片文件解析失败", "失败",
 		"ready.webp", "已经是该格式", "已跳过",
 		"完成 1 个 · 节省 1.9 MB · 跳过 1 个",
@@ -130,13 +140,15 @@ func TestPerOperationResultsStaySeparate(t *testing.T) {
 	a.files = []*fileItem{f}
 
 	tt := render(t, a)
-	if !tt.HasText("1000 B → 500 B  −50%") {
-		t.Fatalf("convert result missing; texts = %v", tt.Texts())
+	for _, want := range []string{"1000 B", "500 B", "−50%"} {
+		if !tt.HasText(want) {
+			t.Fatalf("convert result is missing %q; texts = %v", want, tt.Texts())
+		}
 	}
 
 	a.page = pageResize
 	tt.Frame()
-	for _, want := range []string{"1000 B → 250 B  −75%", "1920×1080 → 960×540", "开始缩放"} {
+	for _, want := range []string{"250 B", "−75%", "1920×1080 → 960×540", "开始缩放"} {
 		if !tt.HasText(want) {
 			t.Fatalf("resize page is missing %q; texts = %v", want, tt.Texts())
 		}
@@ -180,6 +192,12 @@ func TestSidebarNavigatesBetweenPages(t *testing.T) {
 	if a.page != pageResize {
 		t.Fatalf("page = %v, want resize", a.page)
 	}
+	if err := tt.Click("裁剪"); err != nil {
+		t.Fatalf("click crop: %v", err)
+	}
+	if a.page != pageCrop {
+		t.Fatalf("page = %v, want crop", a.page)
+	}
 	if err := tt.Click("边缘处理"); err != nil {
 		t.Fatalf("click edge: %v", err)
 	}
@@ -212,10 +230,63 @@ func TestSidebarNavigatesBetweenPages(t *testing.T) {
 	}
 }
 
-func TestEdgeCropRequiresAnEdge(t *testing.T) {
+func TestCropPagePreviewsEachMode(t *testing.T) {
 	a := newTestApp(t)
-	a.page = pageEdge
-	a.edge = edgeCrop
+	a.page = pageCrop
+	a.files = []*fileItem{{path: `D:\pics\photo.png`, name: "photo.png", size: 1000, width: 1920, height: 1080}}
+
+	// The ratio tab is what the avatar use case needs: the largest 1:1 crop
+	// of a 16:9 photo, scaled so its long edge is 512.
+	tt := render(t, a)
+	for _, want := range []string{"按比例", "按像素", "比例", "定位", "画面中心", "缩放到长边", "1920×1080 → 512×512", "开始裁剪 (1)"} {
+		if !tt.HasText(want) {
+			t.Fatalf("ratio crop is missing %q; texts = %v", want, tt.Texts())
+		}
+	}
+
+	// Without scaling the crop keeps the source pixel density.
+	a.cropResize = false
+	tt.Frame()
+	if !tt.HasText("1920×1080 → 1080×1080") {
+		t.Fatalf("ratio crop without scaling is missing its preview; texts = %v", tt.Texts())
+	}
+	a.cropResize = true
+
+	a.crop = cropPixels
+	tt.Frame()
+	for _, want := range []string{"预览", "上", "下", "左", "右", "至少一个方向大于 0"} {
+		if !tt.HasText(want) {
+			t.Fatalf("pixel crop is missing %q; texts = %v", want, tt.Texts())
+		}
+	}
+}
+
+func TestCropFrameDragStaysInside(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.cropPreview = &cropPreview{imgW: 300, imgH: 200, draw: ui.Rect{W: 300, H: 200}}
+
+	// A 1:1 frame on a 300×200 source is 200 wide, so its centre can only
+	// travel between x=100 and x=200.
+	if !a.moveCropFrame(0, 100) {
+		t.Fatal("dragging to the left edge should move the frame")
+	}
+	if want := 100.0 / 300; math.Abs(a.cropFX-want) > 1e-9 || a.cropFY != 0.5 {
+		t.Fatalf("frame = %v,%v, want %v,0.5", a.cropFX, a.cropFY, want)
+	}
+	if a.cropAnchor != anchorCustom {
+		t.Fatalf("anchor = %v, want custom after a drag", a.cropAnchor)
+	}
+	a.moveCropFrame(300, 100)
+	if want := 200.0 / 300; math.Abs(a.cropFX-want) > 1e-9 {
+		t.Fatalf("frame = %v, want %v", a.cropFX, want)
+	}
+}
+
+func TestPixelCropRequiresAnEdge(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.crop = cropPixels
 	a.files = []*fileItem{{path: `D:\pics\photo.png`, name: "photo.png", size: 1000, width: 100, height: 80}}
 
 	tt := render(t, a)
@@ -297,19 +368,20 @@ func TestSplitPageShowsEditorAndTileCount(t *testing.T) {
 
 	tt := render(t, a)
 	for _, want := range []string{
-		"竖线", "横线", "平移", "吸附", "应用等分", "清空切割线", "每片居中",
-		"1 行 × 1 列 · 1 片", "开始切割 (1 片)",
+		"竖线", "横线", "平移", "吸附", "等分", "清空切割线", "每片居中",
+		"开始切割 (1 片)",
 	} {
 		if !tt.HasText(want) {
 			t.Fatalf("split page is missing %q; texts = %v", want, tt.Texts())
 		}
 	}
 
-	if err := tt.Click("应用等分"); err != nil {
-		t.Fatalf("click equal divide: %v", err)
-	}
+	// The equal-divide fields cut the image immediately; the primary button
+	// and its count are the visible result.
+	a.splitRows, a.splitCols = 2, 2
+	a.applySplitDivide()
 	tt.Frame()
-	if !tt.HasText("2 行 × 2 列 · 4 片") || !tt.HasText("开始切割 (4 片)") {
+	if !tt.HasText("开始切割 (4 片)") {
 		t.Fatalf("equal divide did not update the tile count; texts = %v", tt.Texts())
 	}
 }
@@ -472,9 +544,34 @@ func TestRenderPreview(t *testing.T) {
 			status: statusSuccess, output: `D:\pics\cover_resized.png`, outputSize: 480_000,
 			width: 960, height: 540,
 		})
+	case "crop":
+		a.page = pageCrop
+		a.crop = cropRatio
+		a.cropPreset = "1:1"
+		a.cropAnchor = anchorSubject
+		f := &fileItem{path: `D:\pics\cover.png`, name: "cover.png", size: 2_400_000}
+		a.files = []*fileItem{f}
+		img, err := imageio.DecodeFile("../../.tmp/live/photo.png")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := img.Bounds()
+		w, h := b.Dx(), b.Dy()
+		f.width, f.height = w, h
+		st := &cropPreview{
+			item: f, bitmap: ui.NewBitmap(img), imgW: w, imgH: h,
+			dispW: w, dispH: h, probe: img,
+		}
+		st.detect(10)
+		a.cropPreview = st
+		a.cropFX, a.cropFY = st.subjectCenter()
+		f.setResult(output.CropAspect, opResult{
+			status: statusSuccess, output: `D:\pics\cropped\cover.png`, outputSize: 1_100_000,
+			reason: "裁成 1:1", width: 512, height: 512,
+		})
+		a.summaries[output.CropAspect] = "完成 1 个 · 节省 1.2 MB"
 	case "edge":
 		a.page = pageEdge
-		a.edge = edgeTrim
 		a.files = []*fileItem{{
 			path: `D:\pics\cover.png`, name: "cover.png", size: 2_400_000,
 			width: 1920, height: 1080,
