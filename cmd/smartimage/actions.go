@@ -22,6 +22,7 @@ import (
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/center"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/crop"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/cropaspect"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/matting"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/padaspect"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/resize"
@@ -143,6 +144,7 @@ func (a *app) clearFiles() {
 	a.outputDirs = make(map[output.Op]string)
 	a.notice = ""
 	a.releaseSplit()
+	a.releaseCropPreview()
 }
 
 // removeFile drops one queued entry. Files are only removable while idle so a
@@ -165,6 +167,7 @@ func (a *app) removeFile(f *fileItem) {
 			a.outputDirs = make(map[output.Op]string)
 		}
 		a.syncSplit()
+		a.syncCropPreview()
 		return
 	}
 }
@@ -361,6 +364,60 @@ func (a *app) cropEmpty() bool {
 	return c.Top == 0 && c.Bottom == 0 && c.Left == 0 && c.Right == 0
 }
 
+// cropOp is the operation behind the crop page's current tab.
+func (a *app) cropOp() output.Op {
+	if a.crop == cropPixels {
+		return output.Crop
+	}
+	return output.CropAspect
+}
+
+// cropRatio returns the tab's ratio, using the custom fields when the preset
+// is "custom".
+func (a *app) cropRatio() (int, int) {
+	switch a.cropPreset {
+	case "4:3":
+		return 4, 3
+	case "3:2":
+		return 3, 2
+	case "16:9":
+		return 16, 9
+	case "3:4":
+		return 3, 4
+	case "4:5":
+		return 4, 5
+	case "9:16":
+		return 9, 16
+	case "custom":
+		return int(math.Round(a.cropAspectW)), int(math.Round(a.cropAspectH))
+	default:
+		return 1, 1
+	}
+}
+
+// cropAspectConfig snapshots the ratio tab: the ratio, where the frame sits
+// and whether the crop is scaled to an exact long edge.
+func (a *app) cropAspectConfig() cropaspect.Config {
+	w, h := a.cropRatio()
+	return cropaspect.Config{
+		AspectW:  w,
+		AspectH:  h,
+		Scale:    a.cropScale,
+		Resize:   a.cropResize,
+		LongEdge: int(math.Round(a.cropLongEdge)),
+		CenterX:  a.cropFX,
+		CenterY:  a.cropFY,
+		Format:   a.cropFormat,
+		Policy:   a.policy(),
+	}
+}
+
+// cropAspectError is the reason a ratio or size crop cannot start; the inputs
+// clamp themselves, so it only guards against impossible state.
+func (a *app) cropAspectError() error {
+	return cropaspect.Validate(a.cropAspectConfig())
+}
+
 func (a *app) centerConfig() center.Config {
 	return center.Config{
 		Threshold: int(math.Round(a.centerThreshold)),
@@ -421,6 +478,8 @@ func (a *app) startCurrent() {
 		a.startTrim()
 	case output.Crop:
 		a.startCrop()
+	case output.CropAspect:
+		a.startCropAspect()
 	case output.Center:
 		a.startCenter()
 	case output.Pad:
@@ -463,6 +522,17 @@ func (a *app) startCrop() {
 	cfg := a.cropConfig()
 	a.startRun(output.Crop, a.convertible(output.Crop), func(ctx context.Context, src string) ops.Result {
 		return crop.Run(ctx, src, cfg)
+	})
+}
+
+func (a *app) startCropAspect() {
+	cfg := a.cropAspectConfig()
+	if err := cropaspect.Validate(cfg); err != nil {
+		a.notice = err.Error()
+		return
+	}
+	a.startRun(output.CropAspect, a.convertible(output.CropAspect), func(ctx context.Context, src string) ops.Result {
+		return cropaspect.Run(ctx, src, cfg)
 	})
 }
 
@@ -802,6 +872,9 @@ func (a *app) previewDims(f *fileItem, op output.Op) (w, h int, ok bool) {
 		w = f.width - c.Left - c.Right
 		h = f.height - c.Top - c.Bottom
 		return w, h, w > 0 && h > 0
+	case output.CropAspect:
+		w, h, err := cropaspect.OutputSize(f.width, f.height, a.cropAspectConfig())
+		return w, h, err == nil
 	case output.Pad:
 		w, h, err := padaspect.CanvasSize(a.padConfig())
 		return w, h, err == nil

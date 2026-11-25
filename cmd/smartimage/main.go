@@ -43,6 +43,7 @@ type page int
 const (
 	pageConvert page = iota
 	pageResize
+	pageCrop
 	pageEdge
 	pageFigure
 	pageSplit
@@ -50,11 +51,22 @@ const (
 	pageSettings
 )
 
-type edgeMode int
+// cropMode is the crop page's tab: a fixed ratio (optionally scaled) or an
+// inset by pixels.
+type cropMode int
 
 const (
-	edgeTrim edgeMode = iota
-	edgeCrop
+	cropRatio cropMode = iota
+	cropPixels
+)
+
+// cropAnchor is where the ratio crop's frame sits.
+type cropAnchor int
+
+const (
+	anchorFrame cropAnchor = iota
+	anchorSubject
+	anchorCustom
 )
 
 type figMode int
@@ -134,7 +146,7 @@ type app struct {
 	shell *sidebar.Shell
 	win   *mygo.Window
 	page  page
-	edge  edgeMode
+	crop  cropMode
 
 	settings settings.Settings
 	format   imageio.Format
@@ -150,11 +162,26 @@ type app struct {
 	trimSides     trim.Sides
 	trimFormat    string
 
-	cropTop    float64
-	cropBottom float64
-	cropLeft   float64
-	cropRight  float64
-	cropFormat string
+	cropTop       float64
+	cropBottom    float64
+	cropLeft      float64
+	cropRight     float64
+	cropPreset    string
+	cropAspectW   float64
+	cropAspectH   float64
+	cropResize    bool
+	cropLongEdge  float64
+	cropAnchor    cropAnchor
+	cropScale     float64
+	cropZoom      float64
+	cropPanX      float32
+	cropPanY      float32
+	cropFX        float64
+	cropFY        float64
+	cropThreshold float64
+	cropFormat    string
+	cropPreview   *cropPreview
+	previewSel    ui.Selection[any]
 
 	fig figMode
 
@@ -255,6 +282,17 @@ func main() {
 		trimThreshold:   10,
 		trimSides:       trim.All,
 		trimFormat:      "original",
+		cropPreset:      "1:1",
+		cropAspectW:     1,
+		cropAspectH:     1,
+		cropResize:      true,
+		cropLongEdge:    512,
+		cropAnchor:      anchorFrame,
+		cropScale:       1,
+		cropZoom:        cropMinZoom,
+		cropFX:          0.5,
+		cropFY:          0.5,
+		cropThreshold:   10,
 		cropFormat:      "original",
 		fig:             figCenter,
 		centerThreshold: 10,
@@ -449,8 +487,8 @@ func (a *app) setPage(p page) {
 	}
 }
 
-func (a *app) setEdgeMode(m edgeMode) {
-	a.edge = m
+func (a *app) setCropMode(m cropMode) {
+	a.crop = m
 	if a.win != nil {
 		a.win.Invalidate()
 	}
@@ -467,10 +505,9 @@ func (a *app) currentOp() output.Op {
 	switch a.page {
 	case pageResize:
 		return output.Resize
+	case pageCrop:
+		return a.cropOp()
 	case pageEdge:
-		if a.edge == edgeCrop {
-			return output.Crop
-		}
 		return output.Trim
 	case pageFigure:
 		if a.fig == figPad {

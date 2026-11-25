@@ -8,6 +8,7 @@ import (
 	"github.com/disintegration/imaging"
 	"github.com/egoist/mygo/ui"
 	"github.com/oneo-me/onevra/source/components"
+	"github.com/oneo-me/onevra/source/icons/lucide"
 
 	"github.com/Shirolin/SmartImage-Toolkit/internal/imageio"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops"
@@ -182,65 +183,72 @@ func (a *app) splitToolbar(c *ui.Context) {
 		return
 	}
 	panel(c, func() {
-		ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			components.Text(c, "图片").FontSize(12).TextColor(t.TextMuted)
-			a.splitFileSelect(c, 190)
-
-			components.Text(c, "模式").FontSize(12).TextColor(t.TextMuted)
-			mode := int(st.mode)
-			tabs := components.Tabs(c, &mode, components.TabsSegmented, "竖线", "横线", "平移")
-			if tabs.List.Changed() {
-				st.mode = splitMode(mode)
-			}
-
-			components.Switch(c, &st.snap, "吸附").Disabled(a.busy)
-
-			ui.Spacer(c)
-			components.Text(c, "等分").FontSize(12).TextColor(t.TextMuted)
-			if numberField(c, &a.splitRows, 1, 50, 1, 64, "行数") {
-				a.applySplitDivide()
-			}
-			components.Text(c, "×").FontSize(12).TextColor(t.TextMuted)
-			if numberField(c, &a.splitCols, 1, 50, 1, 64, "列数") {
-				a.applySplitDivide()
-			}
-			if components.Button(c, "应用等分", components.ButtonOutline).Disabled(a.busy).Clicked() {
-				a.applySplitDivide()
-			}
-			if components.Button(c, "清空切割线", components.ButtonGhost).Disabled(a.busy).Clicked() {
-				st.cutX, st.cutY = nil, nil
-				a.resetOp(output.Split)
-			}
-		})
-		ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			components.Text(c, "输出格式").FontSize(12).TextColor(t.TextMuted)
-			if selectControl(c, &a.splitFormat, 132, opFormatLabel, opFormatChoices, a.busy) {
-				a.resetOp(output.Split)
-			}
-			components.Switch(c, &a.splitCenter, "每片居中").Disabled(a.busy)
-			if a.splitCenter {
-				components.Text(c, "容差").FontSize(12).TextColor(t.TextMuted)
-				if numberField(c, &a.splitThreshold, 1, 100, 1, 84, "色差容忍度") {
-					a.resetOp(output.Split)
-				}
-				if selectControl(c, &a.splitSides, 96, centerSidesLabel,
-					[]center.Sides{center.All, center.TopBottom, center.LeftRight}, a.busy) {
-					a.resetOp(output.Split)
-				}
-				if selectControl(c, &a.splitFill, 96, fillLabel,
-					[]ops.Fill{ops.FillAuto, ops.FillTransparent, ops.FillWhite, ops.FillBlack}, a.busy) {
-					a.resetOp(output.Split)
-				}
-			}
-			ui.Spacer(c)
-			components.Text(c, "输出位置").FontSize(12).TextColor(t.TextMuted)
-			a.locationSelect(c, 150)
-			if components.Button(c, "添加图片", components.ButtonSecondary).Disabled(a.busy).Clicked() {
+		ui.Row(c).FillWidth().Wrap().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			fieldGroup(c, func() {
+				fieldLabel(c, "图片")
+				a.splitFileSelect(c, 180)
+			})
+			if buttonWithIcon(c, lucide.Plus(), "添加图片", components.ButtonSecondary).Disabled(a.busy).Clicked() {
 				a.chooseFiles()
 			}
+
+			fieldGroup(c, func() {
+				fieldLabel(c, "模式")
+				mode := int(st.mode)
+				tabs := components.Tabs(c, &mode, components.TabsSegmented, "竖线", "横线", "平移")
+				if tabs.List.Changed() {
+					st.mode = splitMode(mode)
+				}
+			})
+
+			ui.Spacer(c)
+		})
+		ui.Row(c).FillWidth().Wrap().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			components.Switch(c, &st.snap, "吸附").Disabled(a.busy)
+			toolbarDivider(c)
+			components.Switch(c, &a.splitCenter, "每片居中").Disabled(a.busy)
+			fieldGroup(c, func() {
+				fieldLabel(c, "等分")
+				if numberField(c, &a.splitRows, 1, 50, 1, 64, "行数") {
+					a.applySplitDivide()
+				}
+				unitText(c, "×")
+				if numberField(c, &a.splitCols, 1, 50, 1, 64, "列数") {
+					a.applySplitDivide()
+				}
+			})
+
+			if a.splitCenter {
+				fieldGroup(c, func() {
+					fieldLabel(c, "容差")
+					if numberField(c, &a.splitThreshold, 1, 100, 1, 84, "色差容忍度") {
+						a.resetOp(output.Split)
+					}
+					fieldLabel(c, "参与边")
+					if selectControl(c, &a.splitSides, 96, centerSidesLabel,
+						[]center.Sides{center.All, center.TopBottom, center.LeftRight}, a.busy) {
+						a.resetOp(output.Split)
+					}
+					fieldLabel(c, "填充")
+					if selectControl(c, &a.splitFill, 96, fillLabel,
+						[]ops.Fill{ops.FillAuto, ops.FillTransparent, ops.FillWhite, ops.FillBlack}, a.busy) {
+						a.resetOp(output.Split)
+					}
+				})
+			}
+
+			fieldGroup(c, func() {
+				fieldLabel(c, "输出格式")
+				if selectControl(c, &a.splitFormat, 120, opFormatLabel, opFormatChoices, a.busy) {
+					a.resetOp(output.Split)
+				}
+				toolbarDivider(c)
+				fieldLabel(c, "输出位置")
+				a.locationSelect(c, 150)
+			})
 		})
 		ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			components.Text(c, a.outputHint()).FontSize(12).TextColor(t.TextMuted).Grow(1).MinWidth(0).SingleLine()
+			components.Text(c, a.outputHint()).FontSize(11.5).TextColor(t.TextMuted).Grow(1).MinWidth(0).SingleLine()
 			if a.settings.Location == settings.CustomDir {
 				if components.Button(c, "更改目录…", components.ButtonGhost).Disabled(a.busy).Clicked() {
 					a.chooseOutputDir(nil)
@@ -249,7 +257,7 @@ func (a *app) splitToolbar(c *ui.Context) {
 			if components.Button(c, "打开输出文件夹", components.ButtonGhost).Disabled(!a.hasOutput()).Clicked() {
 				a.openOutputDir()
 			}
-			if components.Button(c, "清空", components.ButtonGhost).Disabled(a.busy || len(a.files) == 0).Clicked() {
+			if components.Button(c, "清空列表", components.ButtonGhost).Disabled(a.busy || len(a.files) == 0).Clicked() {
 				a.clearFiles()
 			}
 		})
@@ -323,8 +331,12 @@ func (a *app) splitCanvas(c *ui.Context) {
 	case st.mode == splitPan:
 		cursor = ui.CursorGrab
 	}
+	canvas := ui.RGB(0x17, 0x16, 0x14)
+	if !t.Dark {
+		canvas = ui.RGB(0xDE, 0xDA, 0xD3)
+	}
 	e := ui.Box(c).Fill().MinHeight(0).Clip().Radius(t.Radius).
-		Background(ui.RGB(0x18, 0x18, 0x1b)).Cursor(cursor)
+		Background(canvas).Border(1, t.Border.Alpha(0.6)).Cursor(cursor)
 	if st.bitmap == nil {
 		e.Children(func() {
 			ui.Column(c).Fill().Center().Children(func() {
@@ -337,12 +349,12 @@ func (a *app) splitCanvas(c *ui.Context) {
 	// DrawOver runs after the element's own clip pops, so clip the canvas
 	// here; otherwise a zoomed image paints over the toolbar.
 	e.DrawOver(func(p *ui.Painter, r ui.Rect) {
-		p.Clip(r, t.Radius, func() { a.paintSplit(p, r, st) })
+		p.Clip(r, t.Radius, func() { a.paintSplit(p, r, st, t) })
 	})
 	e.HandleInput(func(ev ui.InputEvent) bool { return a.splitInput(ev, st) })
 }
 
-func (a *app) paintSplit(p *ui.Painter, r ui.Rect, st *splitState) {
+func (a *app) paintSplit(p *ui.Painter, r ui.Rect, st *splitState, t *ui.Theme) {
 	zoom := st.zoom
 	panX, panY := st.panX, st.panY
 	if zoom <= 0 {
@@ -365,12 +377,19 @@ func (a *app) paintSplit(p *ui.Painter, r ui.Rect, st *splitState) {
 	x0 := r.X + panX
 	y0 := r.Y + panY
 	p.Image(st.bitmap, ui.Rect{X: x0, Y: y0, W: st.view.displayW, H: st.view.displayH}, ui.FillBox)
-	p.Stroke(ui.Rect{X: x0, Y: y0, W: st.view.displayW, H: st.view.displayH}, ui.RGBA(255, 255, 255, 0.25), 0, 1)
+	p.Stroke(ui.Rect{X: x0, Y: y0, W: st.view.displayW, H: st.view.displayH}, t.Text.Alpha(0.25), 0, 1)
 
 	scale := st.view.imageToScreen(st.imgW)
 	verticalColor := ui.RGBA(0, 229, 255, 0.95)
 	horizontalColor := ui.RGBA(255, 42, 109, 0.95)
 	activeColor := ui.RGBA(255, 214, 10, 0.95)
+	if !t.Dark {
+		// The bright guides wash out on a light canvas; keep the hues, deepen
+		// the values so a cut line stays visible over pale photos.
+		verticalColor = ui.RGBA(0x0B, 0x7C, 0x8A, 0.95)
+		horizontalColor = ui.RGBA(0xC0, 0x1B, 0x5B, 0.95)
+		activeColor = ui.RGBA(0xA8, 0x6B, 0x00, 0.95)
+	}
 	for i, v := range st.cutX {
 		x := x0 + float32(v)*scale
 		c := verticalColor
@@ -684,22 +703,32 @@ func (a *app) splitActionBar(c *ui.Context) {
 	summary := a.summaries[output.Split]
 	if a.busy {
 		summary = "正在切割…"
-	} else if summary == "" {
-		if err != nil {
-			summary = err.Error()
-		} else {
-			summary = fmt.Sprintf("%d 行 × %d 列 · %d 片", g.Rows(), g.Cols(), len(g.Tiles()))
-		}
+	} else if summary == "" && err != nil {
+		summary = err.Error()
 	}
 	ui.Column(c).FillWidth().Padding(t.Space(2), t.Space(3), t.Space(3), t.Space(3)).Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(t.Space(2)).Children(func() {
-			components.Text(c, "滚轮缩放 · 拖动切割线 · 双击删除").FontSize(11).TextColor(t.TextMuted).Shrink(0)
-			components.Text(c, summary).FontSize(12).TextColor(t.TextMuted).Grow(1).MinWidth(0).SingleLine()
+			components.Text(c, fmt.Sprintf("共 %d 张 · 滚轮缩放 · 拖动切割线 · 双击删除", len(a.files))).FontSize(11.5).TextColor(t.TextMuted).Grow(1).MinWidth(0).SingleLine()
+			if summary != "" {
+				components.Text(c, summary).FontSize(11.5).FontWeight(500).Shrink(0).SingleLine()
+			}
 			if a.busy {
 				if components.Button(c, "取消", components.ButtonSecondary).Clicked() {
 					a.cancelRun()
 				}
 				return
+			}
+			hasLines := a.split != nil && len(a.split.cutX)+len(a.split.cutY) > 0
+			if components.Button(c, "清空切割线", components.ButtonGhost).Disabled(!hasLines).Clicked() {
+				a.split.cutX, a.split.cutY = nil, nil
+				a.resetOp(output.Split)
+				c.Invalidate()
+			}
+			if components.Button(c, "适应窗口", components.ButtonGhost).Disabled(a.split == nil).Clicked() {
+				if a.split != nil {
+					a.split.zoom, a.split.panX, a.split.panY = 0, 0, 0
+					c.Invalidate()
+				}
 			}
 			disabled := err != nil || a.split == nil || a.split.bitmap == nil
 			label := "开始切割"

@@ -14,6 +14,7 @@ import (
 	"github.com/Shirolin/SmartImage-Toolkit/internal/imageio"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/center"
+	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/cropaspect"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/padaspect"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/resize"
 	"github.com/Shirolin/SmartImage-Toolkit/internal/ops/trim"
@@ -23,35 +24,60 @@ import (
 
 func (a *app) sidebar(c *ui.Context) {
 	t := c.Theme()
-	top := sidebar.HeaderHeight(c) + t.Space(2)
+	top := sidebar.HeaderHeight(c) + t.Space(1)
 	ui.Column(c).Fill().Padding(top, t.Space(2), t.Space(3), t.Space(2)).Gap(t.Space(2)).Children(func() {
+		a.sidebarBrand(c)
 		components.SidebarSection(c, "处理", func() {
-			if components.SidebarItem(c, "快速转换", lucide.Zap(), a.page == pageConvert).Clicked() {
-				a.setPage(pageConvert)
-			}
-			if components.SidebarItem(c, "缩放", lucide.Scaling(), a.page == pageResize).Clicked() {
-				a.setPage(pageResize)
-			}
-			if components.SidebarItem(c, "边缘处理", lucide.Scissors(), a.page == pageEdge).Clicked() {
-				a.setPage(pageEdge)
-			}
-			if components.SidebarItem(c, "构图", lucide.Frame(), a.page == pageFigure).Clicked() {
-				a.setPage(pageFigure)
-			}
-			if components.SidebarItem(c, "切图", lucide.SquareSplitVertical(), a.page == pageSplit).Clicked() {
-				a.setPage(pageSplit)
-			}
-			if components.SidebarItem(c, "抠图", lucide.WandSparkles(), a.page == pageMatting).Clicked() {
-				a.setPage(pageMatting)
-			}
+			a.navItem(c, "快速转换", lucide.Zap(), pageConvert)
+			a.navItem(c, "缩放", lucide.Scaling(), pageResize)
+			a.navItem(c, "裁剪", lucide.Crop(), pageCrop)
+			a.navItem(c, "边缘处理", lucide.Scissors(), pageEdge)
+			a.navItem(c, "构图", lucide.Frame(), pageFigure)
+			a.navItem(c, "切图", lucide.SquareSplitVertical(), pageSplit)
+			a.navItem(c, "抠图", lucide.WandSparkles(), pageMatting)
 		})
 		ui.Spacer(c)
 		components.SidebarSection(c, "应用", func() {
-			if components.SidebarItem(c, "设置", lucide.Settings(), a.page == pageSettings).Clicked() {
-				a.setPage(pageSettings)
-			}
+			a.navItem(c, "设置", lucide.Settings(), pageSettings)
 		})
-		components.Text(c, "原生版 · P6").FontSize(11).TextColor(t.TextMuted).PaddingStart(t.Space(1))
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(t.Space(1.5)).
+			Padding(t.Space(1), t.Space(2), 0, t.Space(2)).Children(func() {
+			ui.Box(c).Size(6, 6).Radius(3).Background(t.Success).Shrink(0)
+			components.Text(c, "本地处理 · 无需联网").FontSize(10.5).TextColor(t.TextMuted).SingleLine()
+		})
+	})
+}
+
+// navItem keeps the leading icon quiet until its page is active; six accent
+// icons at once would compete with the selected row.
+func (a *app) navItem(c *ui.Context, label string, icon *ui.SVG, p page) {
+	t := c.Theme()
+	selected := a.page == p
+	item := components.SidebarItemWithLeading(c, label, selected, func(c *ui.Context, size float32) {
+		color := t.TextMuted
+		if selected {
+			color = t.Accent
+		}
+		components.Icon(c, icon).Size(size, size).TextColor(color)
+	})
+	if item.Clicked() {
+		a.setPage(p)
+	}
+}
+
+// sidebarBrand anchors the window with the product name. The shell's floating
+// header owns the collapse control, so the mark starts below it.
+func (a *app) sidebarBrand(c *ui.Context) {
+	t := c.Theme()
+	ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(t.Space(2)).
+		Padding(t.Space(1), t.Space(1), t.Space(1), t.Space(1)).Children(func() {
+		ui.Box(c).Size(32, 32).Background(t.Accent).Radius(t.Radius).Center().Shrink(0).Children(func() {
+			components.Icon(c, lucide.Image()).Size(18, 18).TextColor(t.AccentText)
+		})
+		ui.Column(c).Gap(0).MinWidth(0).Children(func() {
+			components.Text(c, "SmartImage").FontSize(14).FontWeight(700).SingleLine()
+			components.Text(c, "图像批处理工作台").FontSize(10.5).TextColor(t.TextMuted).SingleLine()
+		})
 	})
 }
 
@@ -61,11 +87,13 @@ func (a *app) titlebar(c *ui.Context) {
 	switch a.page {
 	case pageResize:
 		title = "缩放"
-	case pageEdge:
-		title = "边缘处理 · 智能去边"
-		if a.edge == edgeCrop {
-			title = "边缘处理 · 手动裁剪"
+	case pageCrop:
+		title = "裁剪 · 按比例"
+		if a.crop == cropPixels {
+			title = "裁剪 · 按像素"
 		}
+	case pageEdge:
+		title = "边缘处理"
 	case pageFigure:
 		title = "构图 · 智能居中"
 		if a.fig == figPad {
@@ -79,11 +107,45 @@ func (a *app) titlebar(c *ui.Context) {
 		title = "设置"
 	}
 	ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(t.Space(2)).Children(func() {
-		components.Text(c, title).FontSize(13).FontWeight(600).SingleLine()
-		if a.busy {
-			components.Text(c, fmt.Sprintf("· %d / %d", a.done, a.total)).FontSize(12).TextColor(t.TextMuted).SingleLine()
-		}
+		ui.Column(c).Gap(1).Justify(ui.Center).MinWidth(0).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(t.Space(2)).Children(func() {
+				components.Text(c, title).FontSize(15).FontWeight(600).SingleLine()
+				if a.busy {
+					components.Text(c, fmt.Sprintf("%d / %d", a.done, a.total)).
+						FontSize(11).TextColor(t.TextMuted).SingleLine()
+				}
+			})
+			components.Text(c, a.pageSubtitle()).FontSize(11).TextColor(t.TextMuted).SingleLine()
+		})
 	})
+}
+
+// pageSubtitle gives the floating title a second line of context.
+func (a *app) pageSubtitle() string {
+	switch a.page {
+	case pageResize:
+		return "按宽度、高度或百分比统一缩放"
+	case pageCrop:
+		if a.crop == cropPixels {
+			return "按像素裁掉四边"
+		}
+		return "拖动裁剪框，按比例裁切或缩放到指定尺寸"
+	case pageEdge:
+		return "自动切除纯色或透明边缘"
+	case pageFigure:
+		if a.fig == figPad {
+			return "按目标比例扩展画布"
+		}
+		return "识别主体后重新分配留白"
+	case pageSplit:
+		return "拖动切割线，导出规则切片"
+	case pageMatting:
+		return "本地 AI 去除背景，保留透明通道"
+	case pageSettings:
+		return "修改后自动保存，下次启动继续使用"
+	default:
+		return "选择输出格式，批量转换图片"
+	}
 }
 
 func (a *app) content(c *ui.Context) {
@@ -95,8 +157,10 @@ func (a *app) content(c *ui.Context) {
 			a.settingsPage(c)
 		case pageResize:
 			a.workPage(c, a.resizeToolbar)
+		case pageCrop:
+			a.cropPage(c)
 		case pageEdge:
-			a.workPage(c, a.edgeToolbar)
+			a.workPage(c, a.trimToolbar)
 		case pageFigure:
 			a.workPage(c, a.figureToolbar)
 		case pageSplit:
@@ -113,7 +177,6 @@ func (a *app) workPage(c *ui.Context, toolbar func(*ui.Context)) {
 	t := c.Theme()
 	ui.Column(c).Fill().Gap(t.Space(3)).Children(func() {
 		a.noticeBanner(c)
-		a.edgeTabs(c)
 		a.figureTabs(c)
 		toolbar(c)
 		if len(a.files) == 0 {
@@ -169,15 +232,15 @@ func (a *app) countdownBanner(c *ui.Context) {
 		})
 }
 
-// edgeTabs only renders on the edge page; the caller keeps the layout stable.
-func (a *app) edgeTabs(c *ui.Context) {
-	if a.page != pageEdge {
+// cropTabs only renders on the crop page; the caller keeps the layout stable.
+func (a *app) cropTabs(c *ui.Context) {
+	if a.page != pageCrop {
 		return
 	}
-	selected := int(a.edge)
-	tabs := components.Tabs(c, &selected, components.TabsSegmented, "智能去边", "手动裁剪")
+	selected := int(a.crop)
+	tabs := components.Tabs(c, &selected, components.TabsSegmented, "按比例", "按像素")
 	if tabs.List.Changed() {
-		a.setEdgeMode(edgeMode(selected))
+		a.setCropMode(cropMode(selected))
 	}
 }
 
@@ -198,6 +261,48 @@ func panel(c *ui.Context, build func()) {
 		Background(t.Surface).Border(1, t.Border).Radius(t.Radius * 1.5).Children(build)
 }
 
+// fieldLabel keeps toolbars from squeezing the short Chinese labels.
+func fieldLabel(c *ui.Context, text string) {
+	components.Text(c, text).FontSize(11.5).TextColor(c.Theme().TextMuted).Shrink(0).NoWrap()
+}
+
+// unitText is the muted suffix beside a number field, such as px or %.
+func unitText(c *ui.Context, text string) {
+	components.Text(c, text).FontSize(11.5).TextColor(c.Theme().TextMuted).Shrink(0).NoWrap()
+}
+
+// toolbarDivider separates independent control groups without a second card.
+func toolbarDivider(c *ui.Context) {
+	ui.Box(c).Width(1).Height(18).MarginX(c.Theme().Space(1)).Background(c.Theme().Border).Shrink(0)
+}
+
+// toolbarNote fills the trailing side of a control row with one short,
+// factual explanation instead of leaving a dead gap.
+func toolbarNote(c *ui.Context, text string) {
+	t := c.Theme()
+	ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
+		components.Icon(c, lucide.Info()).Size(13, 13).TextColor(t.TextMuted).Shrink(0)
+		components.Text(c, text).FontSize(11.5).TextColor(t.TextMuted).SingleLine()
+	})
+}
+
+// fieldGroup keeps a label and its control on the same wrapped line.
+func fieldGroup(c *ui.Context, build func()) {
+	t := c.Theme()
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Shrink(0).Children(build)
+}
+
+// buttonWithIcon puts the glyph before the label; Button itself only appends
+// children after its text.
+func buttonWithIcon(c *ui.Context, icon *ui.SVG, label string, variant components.ButtonVariant) ui.Element {
+	b := components.Button(c, "", variant).Label(label).Gap(6)
+	b.Children(func() {
+		components.Icon(c, icon).Size(15, 15)
+		components.Text(c, label).FontSize(12.5).FontWeight(600).SingleLine()
+	})
+	return b
+}
+
 func (a *app) convertToolbar(c *ui.Context) {
 	panel(c, func() {
 		a.outputRows(c, func() {
@@ -210,7 +315,7 @@ func (a *app) resizeToolbar(c *ui.Context) {
 	t := c.Theme()
 	panel(c, func() {
 		ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			components.Text(c, "模式").FontSize(12).TextColor(t.TextMuted)
+			fieldLabel(c, "模式")
 			if selectControl(c, &a.resizeMode, 118, resizeModeLabel,
 				[]resize.Mode{resize.ByWidth, resize.ByHeight, resize.ByPercent, resize.Custom}, a.busy) {
 				a.resetOp(output.Resize)
@@ -218,39 +323,40 @@ func (a *app) resizeToolbar(c *ui.Context) {
 
 			switch a.resizeMode {
 			case resize.ByWidth:
-				components.Text(c, "宽度").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "宽度")
 				if numberField(c, &a.resizeWidth, 1, resize.MaxDim, 1, 108, "目标宽度") {
 					a.resetOp(output.Resize)
 				}
-				components.Text(c, "px").FontSize(12).TextColor(t.TextMuted)
+				unitText(c, "px")
 			case resize.ByHeight:
-				components.Text(c, "高度").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "高度")
 				if numberField(c, &a.resizeHeight, 1, resize.MaxDim, 1, 108, "目标高度") {
 					a.resetOp(output.Resize)
 				}
-				components.Text(c, "px").FontSize(12).TextColor(t.TextMuted)
+				unitText(c, "px")
 			case resize.ByPercent:
-				components.Text(c, "比例").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "比例")
 				if numberField(c, &a.resizePercent, 1, resize.MaxPercent, 1, 90, "缩放百分比") {
 					a.resetOp(output.Resize)
 				}
-				components.Text(c, "%").FontSize(12).TextColor(t.TextMuted)
+				unitText(c, "%")
 			case resize.Custom:
-				components.Text(c, "宽").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "宽")
 				if numberField(c, &a.resizeWidth, 1, resize.MaxDim, 1, 92, "目标宽度") {
 					a.resetOp(output.Resize)
 				}
-				components.Text(c, "×").FontSize(12).TextColor(t.TextMuted)
+				unitText(c, "×")
 				if numberField(c, &a.resizeHeight, 1, resize.MaxDim, 1, 92, "目标高度") {
 					a.resetOp(output.Resize)
 				}
-				components.Text(c, "适配").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "适配")
 				if selectControl(c, &a.resizeFit, 106, fitLabel,
 					[]resize.Fit{resize.Cover, resize.Contain, resize.Fill, resize.Inside}, a.busy) {
 					a.resetOp(output.Resize)
 				}
 			}
 			ui.Spacer(c)
+			toolbarNote(c, resizeNote(a.resizeMode))
 		})
 		a.outputRows(c, func() {
 			a.opFormatSelect(c, &a.resizeFormat, output.Resize, 140)
@@ -258,11 +364,32 @@ func (a *app) resizeToolbar(c *ui.Context) {
 	})
 }
 
-func (a *app) edgeToolbar(c *ui.Context) {
+// cropPage adds the preview canvas between the toolbar and the queue.
+func (a *app) cropPage(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Fill().Gap(t.Space(3)).Children(func() {
+		a.noticeBanner(c)
+		a.cropTabs(c)
+		if len(a.files) > 0 {
+			a.syncCropSelection()
+			a.ensureCropPreview()
+		}
+		a.cropToolbar(c)
+		if len(a.files) == 0 {
+			a.emptyState(c)
+			return
+		}
+		a.cropCanvas(c)
+		a.queuePanel(c)
+	})
+}
+
+func (a *app) cropToolbar(c *ui.Context) {
 	t := c.Theme()
 	panel(c, func() {
-		if a.edge == edgeCrop {
-			ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		if a.crop == cropPixels {
+			ui.Row(c).FillWidth().Wrap().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+				a.cropPreviewField(c, 150)
 				for _, field := range []struct {
 					label string
 					value *float64
@@ -272,39 +399,148 @@ func (a *app) edgeToolbar(c *ui.Context) {
 					{"左", &a.cropLeft},
 					{"右", &a.cropRight},
 				} {
-					components.Text(c, field.label).FontSize(12).TextColor(t.TextMuted)
-					if numberField(c, field.value, 0, resize.MaxDim, 1, 88, field.label+"边裁剪像素") {
-						a.resetOp(output.Crop)
-					}
-					components.Text(c, "px").FontSize(12).TextColor(t.TextMuted)
+					fieldGroup(c, func() {
+						fieldLabel(c, field.label)
+						if numberField(c, field.value, 0, resize.MaxDim, 1, 88, field.label+"边裁剪像素") {
+							a.resetOp(output.Crop)
+						}
+					})
 				}
-				if a.cropEmpty() {
-					components.Text(c, "至少一个方向大于 0").FontSize(11).TextColor(t.Warning)
-				}
-				ui.Spacer(c)
+				toolbarNote(c, "拖动画框或直接填数字，单位 px")
 			})
 		} else {
-			ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				components.Text(c, "容差").FontSize(12).TextColor(t.TextMuted)
-				if numberField(c, &a.trimThreshold, 1, 100, 1, 90, "色差容忍度") {
-					a.resetOp(output.Trim)
+			ui.Row(c).FillWidth().Wrap().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+				a.cropPreviewField(c, 150)
+				fieldGroup(c, func() {
+					fieldLabel(c, "比例")
+					if selectControl(c, &a.cropPreset, 96, cropPresetLabel, cropPresets, a.busy) {
+						a.resetOp(output.CropAspect)
+					}
+					if a.cropPreset == cropCustom {
+						if numberField(c, &a.cropAspectW, 1, 1000, 1, 64, "比例宽") {
+							a.resetOp(output.CropAspect)
+						}
+						unitText(c, ":")
+						if numberField(c, &a.cropAspectH, 1, 1000, 1, 64, "比例高") {
+							a.resetOp(output.CropAspect)
+						}
+					}
+				})
+				a.cropAnchorFields(c)
+				fieldGroup(c, func() {
+					components.Switch(c, &a.cropResize, "缩放到长边").Disabled(a.busy)
+					if a.cropResize {
+						if numberField(c, &a.cropLongEdge, 1, cropaspect.MaxDim, 16, 96, "输出长边像素") {
+							a.resetOp(output.CropAspect)
+						}
+						unitText(c, "px")
+					}
+				})
+				if err := a.cropSubjectWarning(); err != "" {
+					components.Text(c, err).FontSize(11.5).TextColor(t.Warning).SingleLine()
+				} else if len(a.files) > 0 {
+					toolbarNote(c, "拖动画框移动、拖手柄缩放，滚轮放大，双击复位")
 				}
-				components.Text(c, "修剪方向").FontSize(12).TextColor(t.TextMuted)
-				if selectControl(c, &a.trimSides, 128, sidesLabel,
-					[]trim.Sides{trim.All, trim.Bottom, trim.TopBottom, trim.LeftRight}, a.busy) {
-					a.resetOp(output.Trim)
-				}
-				ui.Spacer(c)
 			})
 		}
-		formatOp := output.Trim
-		formatValue := &a.trimFormat
-		if a.edge == edgeCrop {
-			formatOp = output.Crop
-			formatValue = &a.cropFormat
-		}
+		formatOp := a.cropOp()
 		a.outputRows(c, func() {
-			a.opFormatSelect(c, formatValue, formatOp, 140)
+			a.opFormatSelect(c, &a.cropFormat, formatOp, 140)
+		})
+	})
+}
+
+// cropPreviewField is the labelled preview picker. With an empty queue there
+// is nothing to pick, so the field is left out rather than printing a label
+// beside an empty control.
+func (a *app) cropPreviewField(c *ui.Context, width float32) {
+	st := a.cropPreview
+	if st == nil || st.item == nil {
+		return
+	}
+	fieldGroup(c, func() {
+		fieldLabel(c, "预览")
+		a.cropPreviewSelect(c, width)
+	})
+}
+
+// cropPreviewSelect switches the preview between queued images; the batch
+// itself always covers the whole queue.
+func (a *app) cropPreviewSelect(c *ui.Context, width float32) {
+	st := a.cropPreview
+	if st == nil || st.item == nil {
+		return
+	}
+	sel := components.Select(c, &st.item)
+	sel.Trigger.Width(width).Disabled(a.busy).Children(func() {
+		components.Text(c, st.item.name).SingleLine()
+	})
+	sel.Popup(func(ui.Element) {
+		for _, f := range a.files {
+			item := sel.Item(f)
+			item.Children(func() {
+				components.Text(c, f.name).SingleLine()
+			})
+		}
+	})
+	if sel.Trigger.Changed() && st.item != nil {
+		a.selectCropItem(st.item)
+	}
+}
+
+// cropAnchorFields places the frame: frame centre, subject centre, or
+// wherever the user dragged it.
+func (a *app) cropAnchorFields(c *ui.Context) {
+	fieldGroup(c, func() {
+		fieldLabel(c, "定位")
+		options := []cropAnchor{anchorFrame, anchorSubject}
+		if a.cropAnchor == anchorCustom {
+			options = append(options, anchorCustom)
+		}
+		if selectControl(c, &a.cropAnchor, 112, cropAnchorLabel, options, a.busy) {
+			a.setCropAnchor(a.cropAnchor)
+		}
+	})
+	if a.cropAnchor == anchorSubject {
+		fieldGroup(c, func() {
+			fieldLabel(c, "容差")
+			if numberField(c, &a.cropThreshold, 1, 100, 1, 84, "色差容忍度") {
+				a.refreshCropSubject()
+			}
+		})
+	}
+}
+
+// cropSubjectWarning explains a failed subject detection; an empty string
+// means there is nothing to warn about.
+func (a *app) cropSubjectWarning() string {
+	if a.crop != cropRatio || a.cropAnchor != anchorSubject {
+		return ""
+	}
+	if a.cropPreview == nil || !a.cropPreview.hasSubject {
+		return "未探测到主体，已按画面中心"
+	}
+	return ""
+}
+
+func (a *app) trimToolbar(c *ui.Context) {
+	t := c.Theme()
+	panel(c, func() {
+		ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			fieldLabel(c, "容差")
+			if numberField(c, &a.trimThreshold, 1, 100, 1, 90, "色差容忍度") {
+				a.resetOp(output.Trim)
+			}
+			fieldLabel(c, "修剪方向")
+			if selectControl(c, &a.trimSides, 128, sidesLabel,
+				[]trim.Sides{trim.All, trim.Bottom, trim.TopBottom, trim.LeftRight}, a.busy) {
+				a.resetOp(output.Trim)
+			}
+			ui.Spacer(c)
+			toolbarNote(c, "容差越大，判定为背景的范围越宽")
+		})
+		a.outputRows(c, func() {
+			a.opFormatSelect(c, &a.trimFormat, output.Trim, 140)
 		})
 	})
 }
@@ -314,7 +550,7 @@ func (a *app) figureToolbar(c *ui.Context) {
 	panel(c, func() {
 		if a.fig == figPad {
 			ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				components.Text(c, "比例").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "比例")
 				if selectControl(c, &a.padPreset, 104, padPresetLabel,
 					[]padPreset{pad16x9, pad9x16, pad1x1, pad4x5, padCustom}, a.busy) {
 					a.resetOp(output.Pad)
@@ -323,61 +559,63 @@ func (a *app) figureToolbar(c *ui.Context) {
 					if numberField(c, &a.padAspectW, 1, 1000, 1, 72, "比例宽") {
 						a.resetOp(output.Pad)
 					}
-					components.Text(c, ":").FontSize(12).TextColor(t.TextMuted)
+					unitText(c, ":")
 					if numberField(c, &a.padAspectH, 1, 1000, 1, 72, "比例高") {
 						a.resetOp(output.Pad)
 					}
 				}
-				components.Text(c, "长边").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "长边")
 				if numberField(c, &a.padLongEdge, 1, padaspect.MaxDim, 10, 92, "画布长边像素") {
 					a.resetOp(output.Pad)
 				}
-				components.Text(c, "主体占比").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "主体占比")
 				if numberField(c, &a.padRatio, 40, 80, 5, 72, "主体占画布高度的百分比") {
 					a.resetOp(output.Pad)
 				}
-				components.Text(c, "%").FontSize(12).TextColor(t.TextMuted)
+				unitText(c, "%")
 				ui.Spacer(c)
+				toolbarNote(c, "长边决定成品尺寸，比例决定画布形状")
 			})
 			ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				components.Text(c, "主体").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "主体")
 				if selectControl(c, &a.padSubject, 112, subjectLabel,
 					[]padaspect.SubjectMode{padaspect.Full, padaspect.Trim}, a.busy) {
 					a.resetOp(output.Pad)
 				}
 				if a.padSubject == padaspect.Trim {
-					components.Text(c, "容差").FontSize(12).TextColor(t.TextMuted)
+					fieldLabel(c, "容差")
 					if numberField(c, &a.padThreshold, 1, 100, 1, 90, "色差容忍度") {
 						a.resetOp(output.Pad)
 					}
 				}
-				components.Text(c, "填充").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "填充")
 				if selectControl(c, &a.padFill, 104, fillLabel,
 					[]ops.Fill{ops.FillAuto, ops.FillTransparent, ops.FillWhite, ops.FillBlack}, a.busy) {
 					a.resetOp(output.Pad)
 				}
-				if err := a.padError(); err != nil {
-					components.Text(c, err.Error()).FontSize(11).TextColor(t.Warning).SingleLine()
-				}
 				ui.Spacer(c)
+				if a.padError() == nil {
+					toolbarNote(c, "主体占比是主体高度占画布的比例")
+				}
 			})
 		} else {
 			ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				components.Text(c, "容差").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "容差")
 				if numberField(c, &a.centerThreshold, 1, 100, 1, 90, "色差容忍度") {
 					a.resetOp(output.Center)
 				}
-				components.Text(c, "参与边").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "参与边")
 				if selectControl(c, &a.centerSides, 104, centerSidesLabel,
 					[]center.Sides{center.All, center.TopBottom, center.LeftRight}, a.busy) {
 					a.resetOp(output.Center)
 				}
-				components.Text(c, "填充").FontSize(12).TextColor(t.TextMuted)
+				fieldLabel(c, "填充")
 				if selectControl(c, &a.centerFill, 104, fillLabel,
 					[]ops.Fill{ops.FillAuto, ops.FillTransparent, ops.FillWhite, ops.FillBlack}, a.busy) {
 					a.resetOp(output.Center)
 				}
 				ui.Spacer(c)
+				toolbarNote(c, "容差控制主体与背景的判定边界")
 			})
 		}
 		formatOp := output.Center
@@ -398,22 +636,22 @@ func (a *app) mattingToolbar(c *ui.Context) {
 	t := c.Theme()
 	panel(c, func() {
 		ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			components.Text(c, "模型").FontSize(12).TextColor(t.TextMuted)
+			fieldLabel(c, "模型")
 			if selectControl(c, &a.mattingPreset, 160, mattingPresetLabel,
 				[]string{mattingFine, mattingFast}, a.busy) {
 				a.resetOp(output.Matting)
 			}
-			components.Text(c, "边缘羽化").FontSize(12).TextColor(t.TextMuted)
+			fieldLabel(c, "边缘羽化")
 			if numberField(c, &a.mattingFeather, 0, 3, 1, 64, "边缘羽化像素") {
 				a.resetOp(output.Matting)
 			}
-			components.Text(c, "px").FontSize(12).TextColor(t.TextMuted)
-			if err := a.mattingError(); err != nil {
-				components.Text(c, err.Error()).FontSize(11).TextColor(t.Warning).SingleLine()
-			} else {
-				components.Text(c, "本地推理，逐张处理；透明通道会保留").FontSize(11).TextColor(t.TextMuted)
-			}
+			unitText(c, "px")
 			ui.Spacer(c)
+			if err := a.mattingError(); err != nil {
+				components.Text(c, err.Error()).FontSize(11.5).TextColor(t.Warning).SingleLine()
+			} else {
+				toolbarNote(c, "羽化让透明边缘过渡更柔和")
+			}
 		})
 		a.outputRows(c, func() {
 			if selectControl(c, &a.mattingFormat, 132, opFormatLabel, mattingFormatChoices, a.busy) {
@@ -435,10 +673,11 @@ func mattingPresetLabel(p string) string {
 func (a *app) outputRows(c *ui.Context, formatControl func()) {
 	t := c.Theme()
 	ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		components.Text(c, "输出格式").FontSize(12).TextColor(t.TextMuted)
+		fieldLabel(c, "输出格式")
 		formatControl()
 
-		components.Text(c, "输出位置").FontSize(12).TextColor(t.TextMuted)
+		toolbarDivider(c)
+		fieldLabel(c, "输出位置")
 		a.locationSelect(c, 150)
 		if a.settings.Location == settings.CustomDir && a.settings.CustomDir == "" {
 			if components.Button(c, "选择目录", components.ButtonOutline).Clicked() {
@@ -446,12 +685,12 @@ func (a *app) outputRows(c *ui.Context, formatControl func()) {
 			}
 		}
 		ui.Spacer(c)
-		if components.Button(c, "添加图片", components.ButtonSecondary).Disabled(a.busy).Clicked() {
+		if buttonWithIcon(c, lucide.Plus(), "添加图片", components.ButtonSecondary).Disabled(a.busy).Clicked() {
 			a.chooseFiles()
 		}
 	})
 	ui.Row(c).FillWidth().Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		components.Text(c, a.outputHint()).FontSize(12).TextColor(t.TextMuted).Grow(1).MinWidth(0).SingleLine()
+		components.Text(c, a.outputHint()).FontSize(11.5).TextColor(t.TextMuted).Grow(1).MinWidth(0).SingleLine()
 		if a.settings.Location == settings.CustomDir {
 			if components.Button(c, "更改目录…", components.ButtonGhost).Disabled(a.busy).Clicked() {
 				a.chooseOutputDir(nil)
@@ -509,33 +748,56 @@ func selectControl[T comparable](c *ui.Context, value *T, width float32, label f
 
 func (a *app) emptyState(c *ui.Context) {
 	t := c.Theme()
-	ui.Box(c).Fill().Border(1, t.Border).BorderStyle(ui.BorderDashed).Radius(t.Radius * 2).Children(func() {
-		ui.Column(c).Fill().Center().Gap(t.Space(2)).Children(func() {
-			components.Icon(c, lucide.Upload()).Size(34, 34).TextColor(t.TextMuted)
-			components.Text(c, "把图片或文件夹拖到这里").FontSize(17).FontWeight(600)
-			components.Text(c, "支持 PNG、JPEG、WebP、AVIF，可批量处理。").
+	ui.Box(c).Fill().Background(t.Surface.Alpha(0.35)).Border(1, t.Border).
+		BorderStyle(ui.BorderDashed).Radius(t.Radius * 2).Children(func() {
+		ui.Column(c).Fill().Center().Gap(t.Space(1.5)).Children(func() {
+			ui.Box(c).Size(60, 60).Radius(30).Background(t.Accent.Alpha(0.12)).
+				Center().Margin(0, 0, t.Space(1), 0).Children(func() {
+				components.Icon(c, lucide.Upload()).Size(28, 28).TextColor(t.Accent)
+			})
+			components.Text(c, "把图片拖到这里").FontSize(19).FontWeight(600)
+			components.Text(c, "也可以选择文件或整个文件夹 · PNG / JPEG / WebP / AVIF").
 				FontSize(12).TextColor(t.TextMuted)
-			ui.Row(c).Gap(t.Space(2)).Padding(t.Space(2), 0, 0, 0).Children(func() {
-				if components.Button(c, "选择图片", components.ButtonPrimary).Clicked() {
+			ui.Row(c).Gap(t.Space(2)).Padding(t.Space(3), 0, 0, 0).Children(func() {
+				if buttonWithIcon(c, lucide.Plus(), "选择图片", components.ButtonPrimary).Clicked() {
 					a.chooseFiles()
 				}
-				if components.Button(c, "选择文件夹", components.ButtonOutline).Clicked() {
+				if buttonWithIcon(c, lucide.FolderOpen(), "选择文件夹", components.ButtonOutline).Clicked() {
 					a.chooseFolder()
 				}
 			})
+			components.Text(c, "所有处理都在本机完成，图片不会上传").
+				FontSize(10.5).TextColor(t.TextMuted).Padding(t.Space(2), 0, 0, 0)
 		})
 	})
 }
 
+// queuePanel fills the space the page leaves it. On the crop page the canvas
+// above already took its share, so the list only gets what is left.
 func (a *app) queuePanel(c *ui.Context) {
 	t := c.Theme()
 	op := a.currentOp()
-	ui.Column(c).Fill().MinHeight(0).Background(t.Surface).Border(1, t.Border).Radius(t.Radius * 1.5).
+	// The crop page points the list's selection at the previewed image; other
+	// pages get plain rows back.
+	if a.page != pageCrop {
+		a.list.Selection = nil
+	}
+	ui.Column(c).Grow(1).MinHeight(180).Background(t.Surface).Border(1, t.Border).Radius(t.Radius * 1.5).
 		Children(func() {
 			ui.Row(c).FillWidth().Padding(t.Space(2), t.Space(3)).AlignItems(ui.Center).Gap(t.Space(2)).Children(func() {
-				components.Text(c, fmt.Sprintf("文件列表 · %d", len(a.files))).FontSize(12).FontWeight(600)
+				components.Text(c, "文件列表").FontSize(12.5).FontWeight(600)
+				components.Text(c, fmt.Sprintf("· %d", len(a.files))).FontSize(11.5).TextColor(t.TextMuted)
 				ui.Spacer(c)
-				components.Text(c, a.queueStats(op)).FontSize(12).TextColor(t.TextMuted).SingleLine()
+				components.Text(c, a.queueStats(op)).FontSize(11.5).TextColor(t.TextMuted).SingleLine()
+			})
+			ui.Divider(c)
+			ui.Row(c).FillWidth().Padding(t.Space(1), t.Space(2)).Gap(t.Space(2)).
+				AlignItems(ui.Center).Children(func() {
+				ui.Box(c).Width(44).Shrink(0)
+				components.Text(c, "文件").FontSize(10.5).TextColor(t.TextMuted).Grow(1)
+				components.Text(c, "大小").FontSize(10.5).TextColor(t.TextMuted).Width(170).TextAlign(ui.End)
+				components.Text(c, "状态").FontSize(10.5).TextColor(t.TextMuted).Width(64).TextAlign(ui.Center)
+				ui.Box(c).Width(48).Shrink(0)
 			})
 			ui.Divider(c)
 			ui.Column(c).Grow(1).MinHeight(0).Clip().Children(func() {
@@ -555,33 +817,46 @@ func (a *app) fileRow(c *ui.Context, i int, op output.Op) {
 	r := f.result(op)
 	t := c.Theme()
 
-	ui.Row(c).FillWidth().Padding(t.Space(1.5), t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).
-		BorderWidth(0, 0, borderWidth(i, len(a.files)), 0).BorderColor(t.Border).Children(func() {
+	row := ui.Row(c).FillWidth().Padding(t.Space(1.5), t.Space(2)).Gap(t.Space(2)).AlignItems(ui.Center).
+		BorderWidth(0, 0, borderWidth(i, len(a.files)), 0).BorderColor(t.Border)
+	row.Draw(func(p *ui.Painter, rect ui.Rect) {
+		if row.Hovered() {
+			p.Fill(rect, t.SurfaceHover.Alpha(0.45), 0)
+		}
+		// The chosen row is the one the crop canvas shows; the bar makes that
+		// read at a glance instead of relying on the list's faint tint.
+		if sel := a.list.Selection; sel != nil && sel.Has(f.path) {
+			p.Fill(ui.Rect{X: rect.X, Y: rect.Y, W: 2.5, H: rect.H}, t.Accent, 0)
+		}
+	})
+	row.Children(func() {
 		if f.thumb != nil {
-			components.Image(c, f.thumb).Size(42, 42).Fit(ui.Cover).Radius(6).Shrink(0)
+			components.Image(c, f.thumb).Size(44, 44).Fit(ui.Cover).Radius(7).Shrink(0)
 		} else {
-			ui.Box(c).Size(42, 42).Radius(6).Background(t.Background).Border(1, t.Border).Shrink(0)
+			ui.Box(c).Size(44, 44).Radius(7).Background(t.Background).Border(1, t.Border).Shrink(0)
 		}
 
 		ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
-			components.Tooltip(c, components.Text(c, f.name).FontSize(13).SingleLine(), f.path)
+			components.Tooltip(c, components.Text(c, f.name).FontSize(13).FontWeight(500).SingleLine(), f.path)
 			detail := components.Text(c, a.rowDetail(f, op, r)).FontSize(11).TextColor(t.TextMuted).SingleLine()
 			if r.status == statusError {
 				detail.TextColor(t.Danger)
 			}
 		})
 
-		components.Text(c, sizeText(f, r)).FontSize(12).TextColor(sizeColor(t, f, r)).Width(190).Shrink(0)
+		a.sizeCell(c, f, r)
 
 		ui.Box(c).Width(64).Shrink(0).Children(func() {
 			components.Badge(c, statusLabel(r.status), components.BadgeOptions{Tone: statusTone(r.status)})
 		})
 
-		if r.status == statusSuccess && r.output != "" {
-			if components.IconButton(c, lucide.FolderOpen(), "在资源管理器中显示", components.IconButtonCompact).Clicked() {
-				revealFile(r.output)
+		ui.Box(c).Width(20).Shrink(0).Children(func() {
+			if r.status == statusSuccess && r.output != "" {
+				if components.IconButton(c, lucide.FolderOpen(), "在资源管理器中显示", components.IconButtonCompact).Clicked() {
+					revealFile(r.output)
+				}
 			}
-		}
+		})
 		if components.IconButton(c, lucide.X(), "从列表移除 "+f.name, components.IconButtonCompact).
 			Disabled(a.busy).Clicked() {
 			a.removeFile(f)
@@ -629,7 +904,7 @@ func (a *app) rowDetail(f *fileItem, op output.Op, r opResult) string {
 			src += r.reason
 		}
 		if src != "" {
-			return src
+			return withFormat(src, f.path)
 		}
 	}
 
@@ -640,10 +915,53 @@ func (a *app) rowDetail(f *fileItem, op output.Op, r opResult) string {
 			src = fmt.Sprintf("%d×%d", w, h)
 		}
 	}
-	if src != "" {
-		return src + " · " + f.path
+	// The row already names the file; format and pixel size are what differ
+	// between rows. The full path stays in the name's tooltip.
+	return withFormat(src, f.path)
+}
+
+// withFormat appends a row's source format without disturbing an empty detail.
+func withFormat(src, path string) string {
+	tag := formatTag(path)
+	switch {
+	case tag == "":
+		return src
+	case src == "":
+		return tag
+	default:
+		return src + " · " + tag
 	}
-	return f.path
+}
+
+// formatTag is the compact label of a path's extension for the queue row.
+func formatTag(path string) string {
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
+	switch ext {
+	case "jpg", "jpeg", "jfif":
+		return "JPEG"
+	case "tif", "tiff":
+		return "TIFF"
+	}
+	return strings.ToUpper(ext)
+}
+
+// sizeCell shows bytes before and after a run, with the delta colored by
+// direction, so the table reads as a before/after report.
+func (a *app) sizeCell(c *ui.Context, f *fileItem, r opResult) {
+	t := c.Theme()
+	ui.Row(c).Width(170).Shrink(0).Justify(ui.End).AlignItems(ui.Center).Gap(6).Children(func() {
+		if r.status == statusSuccess && r.outputSize > 0 && f.size > 0 {
+			components.Text(c, formatBytes(f.size)).FontSize(11.5).TextColor(t.TextMuted).Shrink(0)
+			components.Text(c, "→").FontSize(11.5).TextColor(t.TextMuted.Alpha(0.7)).Shrink(0)
+			components.Text(c, formatBytes(r.outputSize)).FontSize(11.5).FontWeight(600).Shrink(0)
+			components.Text(c, savings(f.size, r.outputSize)).FontSize(11).
+				TextColor(sizeColor(t, f, r)).Shrink(0)
+			return
+		}
+		if f.size > 0 {
+			components.Text(c, formatBytes(f.size)).FontSize(11.5).TextColor(t.TextMuted).Shrink(0)
+		}
+	})
 }
 
 func (a *app) queueStats(op output.Op) string {
@@ -672,10 +990,28 @@ func (a *app) actionBar(c *ui.Context, op output.Op) {
 			if a.busy {
 				summary = fmt.Sprintf("正在处理 %d / %d", a.done, a.total)
 			}
+			warn := false
 			if summary == "" {
-				summary = a.operationHint(op)
+				// A disabled primary button needs its reason where the click
+				// would land, not tucked into the toolbar.
+				switch {
+				case op == output.Crop && a.cropEmpty():
+					summary, warn = "至少一个方向大于 0。", true
+				case op == output.CropAspect && a.cropAspectError() != nil:
+					summary, warn = a.cropAspectError().Error(), true
+				case op == output.Pad && a.padError() != nil:
+					summary, warn = a.padError().Error(), true
+				case op == output.Matting && a.mattingError() != nil:
+					summary, warn = a.mattingError().Error(), true
+				default:
+					summary = a.operationHint(op)
+				}
 			}
-			components.Text(c, summary).FontSize(12).TextColor(t.TextMuted).Grow(1).MinWidth(0).SingleLine()
+			color := t.TextMuted
+			if warn {
+				color = t.Warning
+			}
+			components.Text(c, summary).FontSize(12).TextColor(color).Grow(1).MinWidth(0).SingleLine()
 			if a.busy {
 				if components.Button(c, "取消", components.ButtonSecondary).Clicked() {
 					a.cancelRun()
@@ -683,6 +1019,7 @@ func (a *app) actionBar(c *ui.Context, op output.Op) {
 			} else {
 				disabled := len(a.convertible(op)) == 0 ||
 					(op == output.Crop && a.cropEmpty()) ||
+					(op == output.CropAspect && a.cropAspectError() != nil) ||
 					(op == output.Pad && a.padError() != nil) ||
 					(op == output.Matting && a.mattingError() != nil)
 				primary := components.Button(c, a.startLabel(op), components.ButtonPrimary).Disabled(disabled)
@@ -712,7 +1049,7 @@ func opVerb(op output.Op) string {
 		return "开始缩放"
 	case output.Trim:
 		return "开始去边"
-	case output.Crop:
+	case output.Crop, output.CropAspect:
 		return "开始裁剪"
 	case output.Center:
 		return "开始居中"
@@ -730,17 +1067,22 @@ func (a *app) operationHint(op output.Op) string {
 	case output.Resize:
 		return "按上面设置的尺寸批量缩放。"
 	case output.Trim:
-		return "自动识别边缘纯色或透明区域并切除。"
+		return "裁到内容边界，四周留白一并去掉。"
 	case output.Crop:
-		return "按上/下/左/右像素批量裁剪。"
+		return "从原图四边向内裁剪，数值按像素计。"
+	case output.CropAspect:
+		if a.cropResize {
+			return "按比例裁切后缩放到指定长边，适合头像。"
+		}
+		return "按比例裁切，保留原像素密度。"
 	case output.Center:
-		return "识别主体后重新分配四周留白，画布尺寸不变。"
+		return "只对齐主体位置，画布尺寸不变。"
 	case output.Pad:
-		return "按目标比例新建画布，主体等比缩小后居中。"
+		return "主体等比缩放后居中。"
 	case output.Matting:
-		return "本地 AI 逐张去除背景，输出带透明通道的图片。"
+		return "输出带透明通道的图片，JPEG 会转为 PNG。"
 	default:
-		return "选择目标格式后批量转换。"
+		return "按所选格式重新编码，尺寸不变。"
 	}
 }
 
@@ -749,9 +1091,8 @@ func (a *app) settingsPage(c *ui.Context) {
 	ui.Scroll(c).Fill().Children(func() {
 		ui.Column(c).FillWidth().Gap(t.Space(3)).Padding(0, t.Space(1), t.Space(4), 0).Children(func() {
 			a.noticeBanner(c)
-			components.Text(c, "修改后自动保存，下次启动继续使用。").FontSize(12).TextColor(t.TextMuted)
 
-			settingsCard(c, "输出", func() {
+			settingsCard(c, lucide.FileOutput(), "输出", func() {
 				a.settingRow(c, "默认转换格式", "快速转换页预先选择的格式", func() {
 					a.formatSelect(c, 150)
 				})
@@ -776,7 +1117,7 @@ func (a *app) settingsPage(c *ui.Context) {
 				}
 			})
 
-			settingsCard(c, "性能", func() {
+			settingsCard(c, lucide.Gauge(), "性能", func() {
 				a.settingRow(c, "同时处理", "图片较多时可以调高", func() {
 					n := a.settings.Concurrency
 					if selectControl(c, &n, 100, func(v int) string { return fmt.Sprintf("%d", v) },
@@ -788,15 +1129,15 @@ func (a *app) settingsPage(c *ui.Context) {
 			})
 
 			if runtime.GOOS == "windows" {
-				settingsCard(c, "快捷方式与右键菜单", func() {
+				settingsCard(c, lucide.Keyboard(), "快捷方式与右键菜单", func() {
 					a.shortcutRow(c, shortcutStartMenu)
 					a.shortcutRow(c, shortcutDesktop)
 					a.contextMenuRow(c)
 				})
 			}
 
-			settingsCard(c, "关于", func() {
-				a.settingRow(c, "版本", "Go 原生重写 · P6", func() {
+			settingsCard(c, lucide.Info(), "关于", func() {
+				a.settingRow(c, "版本", "原生桌面版", func() {
 					components.Text(c, appVersion()).FontSize(12).TextColor(t.TextMuted)
 				})
 				path, err := settings.Path()
@@ -854,11 +1195,15 @@ func (a *app) contextMenuRow(c *ui.Context) {
 	})
 }
 
-func settingsCard(c *ui.Context, title string, build func()) {
+func settingsCard(c *ui.Context, icon *ui.SVG, title string, build func()) {
 	t := c.Theme()
-	ui.Column(c).FillWidth().Padding(t.Space(4)).Gap(t.Space(3)).
+	ui.Column(c).FillWidth().Padding(t.Space(3.5)).Gap(t.Space(3)).
 		Background(t.Surface).Border(1, t.Border).Radius(t.Radius * 1.5).Children(func() {
-		components.Text(c, title).FontSize(12).FontWeight(600).TextColor(t.TextMuted)
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(t.Space(1.5)).Children(func() {
+			components.Icon(c, icon).Size(15, 15).TextColor(t.Accent).Shrink(0)
+			components.Text(c, title).FontSize(12.5).FontWeight(600)
+		})
+		ui.Divider(c)
 		build()
 	})
 }
@@ -905,6 +1250,20 @@ func opFormatLabel(v string) string {
 		return formatLabel(f)
 	}
 	return v
+}
+
+// resizeNote explains what the chosen mode keeps or changes.
+func resizeNote(m resize.Mode) string {
+	switch m {
+	case resize.ByHeight:
+		return "保持宽高比，按高度缩放"
+	case resize.ByPercent:
+		return "按原图尺寸的百分比缩放"
+	case resize.Custom:
+		return "按适配方式缩放或裁切"
+	default:
+		return "保持宽高比，按宽度缩放"
+	}
 }
 
 func resizeModeLabel(m resize.Mode) string {
@@ -970,6 +1329,29 @@ func fillLabel(f ops.Fill) string {
 	}
 }
 
+// cropCustom shows the two ratio fields.
+const cropCustom = "custom"
+
+var cropPresets = []string{"1:1", "4:3", "3:2", "16:9", "3:4", "4:5", "9:16", cropCustom}
+
+func cropPresetLabel(v string) string {
+	if v == cropCustom {
+		return "自定义"
+	}
+	return v
+}
+
+func cropAnchorLabel(v cropAnchor) string {
+	switch v {
+	case anchorSubject:
+		return "主体中心"
+	case anchorCustom:
+		return "自定义位置"
+	default:
+		return "画面中心"
+	}
+}
+
 func padPresetLabel(p padPreset) string {
 	if p == padCustom {
 		return "自定义"
@@ -1025,16 +1407,6 @@ func statusTone(s status) components.BadgeTone {
 	default:
 		return components.BadgeNeutral
 	}
-}
-
-func sizeText(f *fileItem, r opResult) string {
-	if r.status == statusSuccess && r.outputSize > 0 && f.size > 0 {
-		return fmt.Sprintf("%s → %s  %s", formatBytes(f.size), formatBytes(r.outputSize), savings(f.size, r.outputSize))
-	}
-	if f.size > 0 {
-		return formatBytes(f.size)
-	}
-	return ""
 }
 
 func savings(input, output int64) string {

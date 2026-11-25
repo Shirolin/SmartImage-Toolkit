@@ -3,6 +3,7 @@ package main
 import (
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"testing"
 
@@ -35,6 +36,17 @@ func newTestApp(t *testing.T) *app {
 		trimThreshold:   10,
 		trimSides:       trim.All,
 		trimFormat:      "original",
+		cropPreset:      "1:1",
+		cropAspectW:     1,
+		cropAspectH:     1,
+		cropResize:      true,
+		cropLongEdge:    512,
+		cropAnchor:      anchorFrame,
+		cropScale:       1,
+		cropZoom:        cropMinZoom,
+		cropFX:          0.5,
+		cropFY:          0.5,
+		cropThreshold:   10,
 		cropFormat:      "original",
 		fig:             figCenter,
 		centerThreshold: 10,
@@ -82,7 +94,7 @@ func render(t *testing.T, a *app) *ui.Tester {
 
 func TestEmptyStateInvitesDrop(t *testing.T) {
 	tt := render(t, newTestApp(t))
-	for _, want := range []string{"把图片或文件夹拖到这里", "选择图片", "选择文件夹"} {
+	for _, want := range []string{"把图片拖到这里", "选择图片", "选择文件夹"} {
 		if !tt.HasText(want) {
 			t.Fatalf("empty state is missing %q; texts = %v", want, tt.Texts())
 		}
@@ -105,7 +117,7 @@ func TestQueueShowsStatusSizesAndSavings(t *testing.T) {
 
 	tt := render(t, a)
 	for _, want := range []string{
-		"文件列表 · 3", "cover.png", "1920×1080", "2.3 MB → 469 KB  −80%", "完成",
+		"文件列表", "· 3", "cover.png", "1920×1080", "2.3 MB", "469 KB", "−80%", "完成",
 		"banner.jpg", "图片文件解析失败", "失败",
 		"ready.webp", "已经是该格式", "已跳过",
 		"完成 1 个 · 节省 1.9 MB · 跳过 1 个",
@@ -130,13 +142,15 @@ func TestPerOperationResultsStaySeparate(t *testing.T) {
 	a.files = []*fileItem{f}
 
 	tt := render(t, a)
-	if !tt.HasText("1000 B → 500 B  −50%") {
-		t.Fatalf("convert result missing; texts = %v", tt.Texts())
+	for _, want := range []string{"1000 B", "500 B", "−50%"} {
+		if !tt.HasText(want) {
+			t.Fatalf("convert result is missing %q; texts = %v", want, tt.Texts())
+		}
 	}
 
 	a.page = pageResize
 	tt.Frame()
-	for _, want := range []string{"1000 B → 250 B  −75%", "1920×1080 → 960×540", "开始缩放"} {
+	for _, want := range []string{"250 B", "−75%", "1920×1080 → 960×540", "开始缩放"} {
 		if !tt.HasText(want) {
 			t.Fatalf("resize page is missing %q; texts = %v", want, tt.Texts())
 		}
@@ -180,6 +194,12 @@ func TestSidebarNavigatesBetweenPages(t *testing.T) {
 	if a.page != pageResize {
 		t.Fatalf("page = %v, want resize", a.page)
 	}
+	if err := tt.Click("裁剪"); err != nil {
+		t.Fatalf("click crop: %v", err)
+	}
+	if a.page != pageCrop {
+		t.Fatalf("page = %v, want crop", a.page)
+	}
 	if err := tt.Click("边缘处理"); err != nil {
 		t.Fatalf("click edge: %v", err)
 	}
@@ -212,10 +232,267 @@ func TestSidebarNavigatesBetweenPages(t *testing.T) {
 	}
 }
 
-func TestEdgeCropRequiresAnEdge(t *testing.T) {
+func TestCropPagePreviewsEachMode(t *testing.T) {
 	a := newTestApp(t)
-	a.page = pageEdge
-	a.edge = edgeCrop
+	a.page = pageCrop
+	a.files = []*fileItem{{path: `D:\pics\photo.png`, name: "photo.png", size: 1000, width: 1920, height: 1080}}
+
+	// The ratio tab is what the avatar use case needs: the largest 1:1 crop
+	// of a 16:9 photo, scaled so its long edge is 512.
+	tt := render(t, a)
+	for _, want := range []string{"按比例", "按像素", "比例", "定位", "画面中心", "缩放到长边", "1920×1080 → 512×512", "开始裁剪 (1)"} {
+		if !tt.HasText(want) {
+			t.Fatalf("ratio crop is missing %q; texts = %v", want, tt.Texts())
+		}
+	}
+
+	// Without scaling the crop keeps the source pixel density.
+	a.cropResize = false
+	tt.Frame()
+	if !tt.HasText("1920×1080 → 1080×1080") {
+		t.Fatalf("ratio crop without scaling is missing its preview; texts = %v", tt.Texts())
+	}
+	a.cropResize = true
+
+	a.crop = cropPixels
+	tt.Frame()
+	for _, want := range []string{"预览", "上", "下", "左", "右", "至少一个方向大于 0"} {
+		if !tt.HasText(want) {
+			t.Fatalf("pixel crop is missing %q; texts = %v", want, tt.Texts())
+		}
+	}
+}
+
+func TestCropFrameDragStaysInside(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.cropScale = 1
+	a.cropPreview = &cropPreview{imgW: 300, imgH: 200, draw: ui.Rect{W: 300, H: 200}}
+
+	// A 1:1 frame on a 300×200 source is 200 wide, so its centre can only
+	// travel between x=100 and x=200.
+	if !a.beginCropDrag(cropMove, 150, 100) {
+		t.Fatal("the frame's middle should start a move")
+	}
+	if !a.dragCrop(0, 100) {
+		t.Fatal("dragging to the left edge should move the frame")
+	}
+	if want := 100.0 / 300; math.Abs(a.cropFX-want) > 1e-9 || a.cropFY != 0.5 {
+		t.Fatalf("frame = %v,%v, want %v,0.5", a.cropFX, a.cropFY, want)
+	}
+	if a.cropAnchor != anchorCustom {
+		t.Fatalf("anchor = %v, want custom after a drag", a.cropAnchor)
+	}
+	if a.cropScale != 1 {
+		t.Fatalf("scale = %v, want the frame to keep its size", a.cropScale)
+	}
+	a.dragCrop(300, 100)
+	if want := 200.0 / 300; math.Abs(a.cropFX-want) > 1e-9 {
+		t.Fatalf("frame = %v, want %v", a.cropFX, want)
+	}
+}
+
+func TestCropHandleShrinksTheFrame(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.cropScale = 1
+	a.cropPreview = &cropPreview{imgW: 400, imgH: 400, draw: ui.Rect{W: 400, H: 400}}
+
+	// Pulling the bottom-right handle to the middle halves the 1:1 frame and
+	// keeps the opposite corner where it was.
+	if !a.beginCropDrag(cropSE, 400, 400) {
+		t.Fatal("the corner handle should start a resize")
+	}
+	if !a.dragCrop(200, 200) {
+		t.Fatal("dragging the handle inward should resize the frame")
+	}
+	if math.Abs(a.cropScale-0.5) > 1e-9 {
+		t.Fatalf("scale = %v, want 0.5", a.cropScale)
+	}
+	if math.Abs(a.cropFX-0.25) > 1e-9 || math.Abs(a.cropFY-0.25) > 1e-9 {
+		t.Fatalf("centre = %v,%v, want 0.25,0.25", a.cropFX, a.cropFY)
+	}
+	if w, h := a.cropFrameSize(); w != 200 || h != 200 {
+		t.Fatalf("frame = %d×%d, want 200×200", w, h)
+	}
+}
+
+// TestCropCanvasPointerDrivesTheFrame goes through the canvas entry point, so
+// the hit test, the drag and the write-back are all exercised as the mouse
+// would.
+func TestCropCanvasPointerDrivesTheFrame(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.cropScale = 1
+	a.cropPreview = &cropPreview{
+		imgW: 400, imgH: 400, dispW: 400, dispH: 400,
+		bitmap: ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 400, 400))),
+		box:    ui.Rect{W: 400, H: 400},
+		draw:   ui.Rect{W: 400, H: 400},
+	}
+	down := ui.InputEvent{Kind: ui.InputPointerDown, X: 400, Y: 400}
+	if !a.cropInput(down) {
+		t.Fatal("pressing the bottom-right handle should start a resize")
+	}
+	if a.cropPreview.drag != cropSE {
+		t.Fatalf("grabbed %v, want the south-east handle", a.cropPreview.drag)
+	}
+	if !a.cropInput(ui.InputEvent{Kind: ui.InputPointerMove, X: 200, Y: 200}) {
+		t.Fatal("moving inward should resize the frame")
+	}
+	if math.Abs(a.cropScale-0.5) > 1e-9 {
+		t.Fatalf("scale = %v, want 0.5", a.cropScale)
+	}
+	a.cropInput(ui.InputEvent{Kind: ui.InputPointerUp, X: 200, Y: 200})
+	if a.cropPreview.dragging {
+		t.Fatal("releasing should end the drag")
+	}
+}
+
+// TestCropWheelZoomsAboutThePointer checks the source pixel under the cursor
+// stays put, which is what makes a small frame easy to place.
+func TestCropWheelZoomsAboutThePointer(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.cropScale = 1
+	a.cropPreview = &cropPreview{
+		imgW: 400, imgH: 400, dispW: 400, dispH: 400,
+		bitmap: ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 400, 400))),
+		box:    ui.Rect{W: 400, H: 400},
+		draw:   ui.Rect{W: 400, H: 400},
+	}
+	// The real canvas paints this rect; the wheel maps through it.
+	before := a.cropImageRect(a.cropPreview.box)
+	a.cropPreview.draw = before
+	fx0 := (300 - before.X) / before.W
+	fy0 := (100 - before.Y) / before.H
+	// Zoom until the picture is larger than the canvas, which is when the
+	// pointer can stay anchored instead of the pan being clamped back.
+	for i := 0; i < 5; i++ {
+		if !a.cropInput(ui.InputEvent{Kind: ui.InputScroll, X: 300, Y: 100, DY: -1}) {
+			t.Fatal("scrolling up should zoom in")
+		}
+	}
+	if a.cropZoom < 2 {
+		t.Fatalf("zoom = %v, want well above fit", a.cropZoom)
+	}
+	draw := a.cropImageRect(a.cropPreview.box)
+	if fx := (300 - draw.X) / draw.W; math.Abs(float64(fx-fx0)) > 1e-3 {
+		t.Fatalf("source x under the cursor = %v, want %v", fx, fx0)
+	}
+	if fy := (100 - draw.Y) / draw.H; math.Abs(float64(fy-fy0)) > 1e-3 {
+		t.Fatalf("source y under the cursor = %v, want %v", fy, fy0)
+	}
+	a.cropInput(ui.InputEvent{Kind: ui.InputPointerDown, X: 10, Y: 10, Clicks: 2})
+	if a.cropZoom != cropMinZoom || a.cropPanX != 0 {
+		t.Fatalf("double-click = zoom %v pan %v, want fit", a.cropZoom, a.cropPanX)
+	}
+}
+
+// TestCropZoomButtonsWorkWithoutAWheel covers the canvas' own zoom controls,
+// which is what a mouse without a wheel (or a trackpad) reaches for.
+func TestCropZoomButtonsWorkWithoutAWheel(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.cropPreview = &cropPreview{
+		imgW: 400, imgH: 400, dispW: 400, dispH: 400,
+		bitmap: ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 400, 400))),
+		box:    ui.Rect{W: 400, H: 400},
+	}
+	a.cropPreview.draw = a.cropImageRect(a.cropPreview.box)
+	_, _, plus := cropZoomBar(a.cropPreview.box)
+	if !a.cropInput(ui.InputEvent{Kind: ui.InputPointerDown, X: plus.X + plus.W/2, Y: plus.Y + plus.H/2}) {
+		t.Fatal("pressing the plus button should zoom in")
+	}
+	if a.cropZoom <= cropMinZoom {
+		t.Fatalf("zoom = %v, want above fit", a.cropZoom)
+	}
+	if a.cropPreview.dragging {
+		t.Fatal("the zoom button must not start a frame drag")
+	}
+	minus, _, _ := cropZoomBar(a.cropPreview.box)
+	a.cropPreview.draw = a.cropImageRect(a.cropPreview.box)
+	if !a.cropInput(ui.InputEvent{Kind: ui.InputPointerDown, X: minus.X + minus.W/2, Y: minus.Y + minus.H/2}) {
+		t.Fatal("pressing the minus button should zoom out")
+	}
+	if a.cropZoom != cropMinZoom {
+		t.Fatalf("zoom = %v, want fit again", a.cropZoom)
+	}
+}
+
+// TestCropCanvasTakesTheEnginePointer renders the page and presses through the
+// window's own hit test, which is the path a real mouse takes: the canvas must
+// be the element that gets the press, not a wrapper that swallows it.
+func TestCropCanvasTakesTheEnginePointer(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	src := image.NewRGBA(image.Rect(0, 0, 400, 300))
+	for i := range src.Pix {
+		src.Pix[i] = 0xC0
+	}
+	item := &fileItem{path: `D:\pics\sheet.png`, name: "sheet.png", width: 400, height: 300}
+	a.files = []*fileItem{item}
+	a.cropPreview = &cropPreview{
+		item: item, shown: item, bitmap: ui.NewBitmap(src), probe: src,
+		imgW: 400, imgH: 300, dispW: 400, dispH: 300,
+	}
+
+	tt := render(t, a)
+	st := a.cropPreview
+	if st.box.W <= 0 || st.draw.W <= 0 {
+		t.Fatalf("the canvas did not paint: box %v draw %v", st.box, st.draw)
+	}
+	rect, ok := a.cropFrameRect(st.draw)
+	if !ok {
+		t.Fatalf("no frame on a 400×300 source: draw %v", st.draw)
+	}
+	cx, cy := rect.X+rect.W/2, rect.Y+rect.H/2
+	// The frame is the largest 1:1 rect, so its middle is a free move.
+	tt.Press(cx, cy)
+	if !st.dragging || st.drag != cropMove {
+		t.Fatalf("the press did not grab the frame: dragging %v drag %v", st.dragging, st.drag)
+	}
+	before := a.cropFX
+	tt.Move(cx-40, cy)
+	if a.cropFX == before {
+		t.Fatalf("moving the pointer did not reach the canvas: centre still %v", before)
+	}
+	tt.Release(cx-40, cy)
+	if st.dragging {
+		t.Fatal("the release did not end the drag")
+	}
+	if a.cropAnchor != anchorCustom {
+		t.Fatalf("anchor = %v, want custom after a drag", a.cropAnchor)
+	}
+	// The wheel goes through the same local-to-canvas mapping.
+	tt.Scroll(cx, cy, 0, -1)
+	if a.cropZoom <= cropMinZoom {
+		t.Fatalf("zoom = %v, want the wheel to zoom in", a.cropZoom)
+	}
+}
+
+func TestCropPixelHandleWritesInsets(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.crop = cropPixels
+	a.cropPreview = &cropPreview{imgW: 400, imgH: 400, draw: ui.Rect{W: 400, H: 400}}
+
+	// Dragging the right edge to x=150 leaves the other three insets alone.
+	if !a.beginCropDrag(cropE, 400, 200) {
+		t.Fatal("the right handle should start a resize")
+	}
+	if !a.dragCrop(150, 200) {
+		t.Fatal("dragging should write the insets")
+	}
+	if a.cropLeft != 0 || a.cropTop != 0 || a.cropBottom != 0 || math.Abs(a.cropRight-250) > 1e-9 {
+		t.Fatalf("insets = %v/%v/%v/%v, want 0/0/250/0", a.cropTop, a.cropBottom, a.cropLeft, a.cropRight)
+	}
+}
+
+func TestPixelCropRequiresAnEdge(t *testing.T) {
+	a := newTestApp(t)
+	a.page = pageCrop
+	a.crop = cropPixels
 	a.files = []*fileItem{{path: `D:\pics\photo.png`, name: "photo.png", size: 1000, width: 100, height: 80}}
 
 	tt := render(t, a)
@@ -297,19 +574,20 @@ func TestSplitPageShowsEditorAndTileCount(t *testing.T) {
 
 	tt := render(t, a)
 	for _, want := range []string{
-		"竖线", "横线", "平移", "吸附", "应用等分", "清空切割线", "每片居中",
-		"1 行 × 1 列 · 1 片", "开始切割 (1 片)",
+		"竖线", "横线", "平移", "吸附", "等分", "清空切割线", "每片居中",
+		"开始切割 (1 片)",
 	} {
 		if !tt.HasText(want) {
 			t.Fatalf("split page is missing %q; texts = %v", want, tt.Texts())
 		}
 	}
 
-	if err := tt.Click("应用等分"); err != nil {
-		t.Fatalf("click equal divide: %v", err)
-	}
+	// The equal-divide fields cut the image immediately; the primary button
+	// and its count are the visible result.
+	a.splitRows, a.splitCols = 2, 2
+	a.applySplitDivide()
 	tt.Frame()
-	if !tt.HasText("2 行 × 2 列 · 4 片") || !tt.HasText("开始切割 (4 片)") {
+	if !tt.HasText("开始切割 (4 片)") {
 		t.Fatalf("equal divide did not update the tile count; texts = %v", tt.Texts())
 	}
 }
@@ -472,9 +750,34 @@ func TestRenderPreview(t *testing.T) {
 			status: statusSuccess, output: `D:\pics\cover_resized.png`, outputSize: 480_000,
 			width: 960, height: 540,
 		})
+	case "crop":
+		a.page = pageCrop
+		a.crop = cropRatio
+		a.cropPreset = "1:1"
+		a.cropAnchor = anchorSubject
+		f := &fileItem{path: `D:\pics\cover.png`, name: "cover.png", size: 2_400_000}
+		a.files = []*fileItem{f}
+		img, err := imageio.DecodeFile("../../.tmp/live/photo.png")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := img.Bounds()
+		w, h := b.Dx(), b.Dy()
+		f.width, f.height = w, h
+		st := &cropPreview{
+			item: f, bitmap: ui.NewBitmap(img), imgW: w, imgH: h,
+			dispW: w, dispH: h, probe: img,
+		}
+		st.detect(10)
+		a.cropPreview = st
+		a.cropFX, a.cropFY = st.subjectCenter()
+		f.setResult(output.CropAspect, opResult{
+			status: statusSuccess, output: `D:\pics\cropped\cover.png`, outputSize: 1_100_000,
+			reason: "裁成 1:1", width: 512, height: 512,
+		})
+		a.summaries[output.CropAspect] = "完成 1 个 · 节省 1.2 MB"
 	case "edge":
 		a.page = pageEdge
-		a.edge = edgeTrim
 		a.files = []*fileItem{{
 			path: `D:\pics\cover.png`, name: "cover.png", size: 2_400_000,
 			width: 1920, height: 1080,
