@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/png"
 	"math"
@@ -86,10 +87,15 @@ func newTestApp(t *testing.T) *app {
 
 func render(t *testing.T, a *app) *ui.Tester {
 	t.Helper()
+	return renderSize(t, a, 980, 740)
+}
+
+func renderSize(t *testing.T, a *app, w, h int) *ui.Tester {
+	t.Helper()
 	return ui.NewTester(func(c *ui.Context) {
 		theme.Apply(c)
 		a.content(c)
-	}, 980, 740)
+	}, w, h)
 }
 
 func TestEmptyStateInvitesDrop(t *testing.T) {
@@ -98,6 +104,43 @@ func TestEmptyStateInvitesDrop(t *testing.T) {
 		if !tt.HasText(want) {
 			t.Fatalf("empty state is missing %q; texts = %v", want, tt.Texts())
 		}
+	}
+}
+
+// TestPreviewPaneShowsTheChosenRow covers the list pages' preview: a wide
+// window shows it beside the queue, a narrow one keeps the rows full width,
+// and picking a row moves the picture with it.
+func TestPreviewPaneShowsTheChosenRow(t *testing.T) {
+	files := func() []*fileItem {
+		return []*fileItem{
+			{path: `D:\pics\cover.png`, name: "cover.png", size: 2_400_000, width: 1920, height: 1080},
+			{path: `D:\pics\banner.jpg`, name: "banner.jpg", size: 1_200_000, width: 1600, height: 900},
+		}
+	}
+
+	narrow := newTestApp(t)
+	narrow.files = files()
+	if nt := render(t, narrow); nt.HasText("预览") {
+		t.Fatalf("a 980px window should keep the queue full width; texts = %v", nt.Texts())
+	}
+
+	a := newTestApp(t)
+	a.files = files()
+	tt := renderSize(t, a, 1240, 800)
+	for _, want := range []string{"预览", "cover.png", "原图 1920×1080 · 2.3 MB"} {
+		if !tt.HasText(want) {
+			t.Fatalf("the pane is missing %q; texts = %v", want, tt.Texts())
+		}
+	}
+	// Labels come back with zero size on the pass that first measures them, so
+	// the click needs a settled frame to land on a real rect.
+	tt.Frame()
+	if err := tt.Click("banner.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("原图 1600×900 · 1.1 MB") {
+		t.Fatalf("the pane did not follow the row; texts = %v", tt.Texts())
 	}
 }
 
@@ -856,7 +899,12 @@ func TestRenderPreview(t *testing.T) {
 		a.summaries[output.Convert] = "完成 1 个 · 节省 1.9 MB · 跳过 1 个"
 	}
 
-	tt := render(t, a)
+	// One tester at a time: a list state shown by two lists panics.
+	width, height := 980, 740
+	if size := os.Getenv("SMARTIMAGE_PREVIEW_SIZE"); size != "" {
+		fmt.Sscanf(size, "%dx%d", &width, &height)
+	}
+	tt := renderSize(t, a, width, height)
 	// The list measures its rows after the first layout pass; render the
 	// settled frame so variable-height rows appear as users see them.
 	tt.Frame()
